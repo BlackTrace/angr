@@ -15,7 +15,7 @@ Stat = namedtuple('Stat', ('st_dev', 'st_ino', 'st_nlink', 'st_mode', 'st_uid',
                            'st_blocks', 'st_atime', 'st_atimensec', 'st_mtime',
                            'st_mtimensec', 'st_ctime', 'st_ctimensec'))
 
-class SimStateSystem(SimStatePlugin):
+class SimSystemPosix(SimStatePlugin):
     #__slots__ = [ 'maximum_symbolic_syscalls', 'files', 'max_length' ]
 
     # some posix constants
@@ -400,23 +400,16 @@ class SimStateSystem(SimStatePlugin):
             oldmask
         )
 
-    @staticmethod
-    def memocopy(x, memo):
-        if id(x) not in memo:
-            memo[id(x)] = x.copy()
-        return memo[id(x)]
-
-    def copy(self):
+    @SimStatePlugin.memo
+    def copy(self, memo):
         sockets = {}
-        memo = {}
 
-        fs = {path:self.memocopy(f,memo) for path,f in self.fs.iteritems()}
-        files = { fd:self.memocopy(f,memo) for fd,f in self.files.iteritems() }
+        files = { fd: f.copy(memo) for fd, f in self.files.iteritems() }
         for f in self.files:
             if f in self.sockets:
                 sockets[f] = files[f]
 
-        return SimStateSystem(initialize=False, files=files, concrete_fs=self.concrete_fs, chroot=self.chroot, sockets=sockets, pcap_backer=self.pcap, argv=self.argv, argc=self.argc, environ=self.environ, auxv=self.auxv, tls_modules=self.tls_modules, fs=fs, queued_syscall_returns=list(self.queued_syscall_returns), sigmask=self._sigmask, pid=self.pid, brk=self.brk)
+        return SimSystemPosix(initialize=False, files=files, concrete_fs=self.concrete_fs, chroot=self.chroot, sockets=sockets, pcap_backer=self.pcap, argv=self.argv, argc=self.argc, environ=self.environ, auxv=self.auxv, tls_modules=self.tls_modules, fs=fs, queued_syscall_returns=list(self.queued_syscall_returns), sigmask=self._sigmask, pid=self.pid)
 
     def merge(self, others, merge_conditions, common_ancestor=None):
         all_files = set.union(*(set(o.files.keys()) for o in [ self ] + others))
@@ -512,7 +505,7 @@ class SimStateSystem(SimStatePlugin):
         return os.path.join(self.chroot, normalized)
 
 
-SimStateSystem.register_default('posix')
+SimSystemPosix.register_default('posix')
 
 from ..state_plugins.symbolic_memory import SimSymbolicMemory
 from ..errors import SimPosixError, SimError

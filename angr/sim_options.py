@@ -89,6 +89,13 @@ CONCRETIZE_SYMBOLIC_WRITE_SIZES = "CONCRETIZE_SYMBOLIC_WRITE_SIZES"
 # This option concretizes the read size if it's symbolic from the file
 CONCRETIZE_SYMBOLIC_FILE_READ_SIZES = "CONCRETIZE_SYMBOLIC_FILE_READ_SIZES"
 
+# Emulate the existence of an end to files of unspecified length
+# this EOF will be factored into every read from the file
+UNKNOWN_FILES_HAVE_EOF = "UNKNOWN_FILES_HAVE_EOF"
+
+# Reads from devices will have a symbolic size
+SHORT_READS = "SHORT_READS"
+
 # This causes angr to support fully symbolic writes. It is very likely that speed will suffer.
 SYMBOLIC_WRITE_ADDRESSES = "SYMBOLIC_WRITE_ADDRESSES"
 

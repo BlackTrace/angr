@@ -59,7 +59,7 @@ class SimSymbolicMemory(SimMemory): #pylint:disable=abstract-method
     # Lifecycle management
     #
 
-    def copy(self):
+    def copy(self, _):
         """
         Return a copy of the SimMemory.
         """
