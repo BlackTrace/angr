@@ -45,7 +45,7 @@ class SimStatePlugin(Plugin):
         :param memo:    A dictionary mapping object identifiers (id(obj)) to their copied instance.  Use this to avoid
                         infinite recursion and diverged copies.
         """
-        raise NotImplementedError("copy() not implement for %s", self.__class__.__name__)
+        raise NotImplementedError("copy() not implement for %s" % self.__class__.__name__)
 
     @staticmethod
     def memo(f):
@@ -72,7 +72,7 @@ class SimStatePlugin(Plugin):
         :returns: True if the state plugins are actually merged.
         :rtype: bool
         """
-        raise NotImplementedError("merge() not implement for %s", self.__class__.__name__)
+        raise NotImplementedError("merge() not implement for %s" % self.__class__.__name__)
 
     def widen(self, others): #pylint:disable=unused-argument
         """
@@ -85,7 +85,7 @@ class SimStatePlugin(Plugin):
         :returns: True if the state plugin is actually widened.
         :rtype: bool
         """
-        raise NotImplementedError('widen() not implemented for %s', self.__class__.__name__)
+        raise NotImplementedError('widen() not implemented for %s' % self.__class__.__name__)
 
     @classmethod
     def register_default(cls, name, xtr=None): # pylint: disable=arguments-differ
