@@ -52,11 +52,11 @@ class SimStatePlugin(Plugin):
         """
         A decorator function you should apply to ``copy``
         """
-        def inner(self, memo):
+        def inner(self, memo, **kwargs):
             if id(self) in memo:
                 return memo[id(self)]
             else:
-                c = f(self, memo)
+                c = f(self, memo, **kwargs)
                 memo[id(self)] = c
                 return c
         return inner

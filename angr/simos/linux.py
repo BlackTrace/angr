@@ -8,7 +8,7 @@ from archinfo import ArchX86, ArchAMD64, ArchARM, ArchAArch64, ArchMIPS32, ArchM
 from .. import sim_options as o
 from ..tablespecs import StringTableSpec
 from ..procedures import SIM_PROCEDURES as P, SIM_LIBRARIES as L
-from ..state_plugins import SimStateSystem
+from ..state_plugins import SimSystemPosix
 from ..errors import AngrSyscallError
 from .userland import SimUserland
 
@@ -167,7 +167,7 @@ class SimLinux(SimUserland):
         last_addr = self.project.loader.main_object.max_addr
         brk = last_addr - last_addr % 0x1000 + 0x1000
 
-        state.register_plugin('posix', SimStateSystem(fs=fs, concrete_fs=concrete_fs, chroot=chroot, brk=brk))
+        state.register_plugin('posix', SimSystemPosix(fs=fs, concrete_fs=concrete_fs, chroot=chroot, brk=brk))
 
         if self.project.loader.main_object.is_ppc64_abiv1:
             state.libc.ppc64_abiv = 'ppc64_1'

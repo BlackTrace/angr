@@ -218,7 +218,8 @@ class SimStateLibc(SimStatePlugin):
 
         self._errno_location = None
 
-    def copy(self):
+    @SimStatePlugin.memo
+    def copy(self, memo):
         c = SimStateLibc()
         c.heap_location = self.heap_location
         c.mmap_base = self.mmap_base

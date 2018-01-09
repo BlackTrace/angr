@@ -44,7 +44,8 @@ class CallStack(SimStatePlugin):
     # Public methods
     #
 
-    def copy(self, with_tail=True):
+    @SimStatePlugin.memo
+    def copy(self, memo, with_tail=True):
         n = CallStack(
                 call_site_addr=self.call_site_addr,
                 func_addr=self.func_addr,

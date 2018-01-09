@@ -349,7 +349,8 @@ class Unicorn(SimStatePlugin):
 
         self.time = None
 
-    def copy(self):
+    @SimStatePlugin.memo
+    def copy(self, memo):
         u = Unicorn(
             syscall_hooks=dict(self.syscall_hooks),
             cache_key=self.cache_key,

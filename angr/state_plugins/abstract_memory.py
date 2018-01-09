@@ -92,12 +92,13 @@ class MemoryRegion(object):
         self._state = state
         self._memory.set_state(state)
 
-    def copy(self):
+    @SimMemory.memo
+    def copy(self, memo):
         r = MemoryRegion(self._id, self.state,
                          is_stack=self._is_stack,
                          related_function_addr=self._related_function_addr,
                          init_memory=False, endness=self._endness)
-        r._memory = self.memory.copy()
+        r._memory = self.memory.copy(memo)
         r._alocs = copy.deepcopy(self._alocs)
         return r
 

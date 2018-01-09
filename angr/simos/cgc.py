@@ -6,7 +6,7 @@ from cle import BackedCGC
 
 from ..misc import IRange
 from ..procedures import SIM_LIBRARIES as L
-from ..state_plugins import SimStateSystem, SimActionData
+from ..state_plugins import SimSystemPosix, SimActionData
 from .. import sim_options as o
 from .userland import SimUserland
 
@@ -37,7 +37,7 @@ class SimCGC(SimUserland):
             s.memory.mem._preapproved_stack = IRange(0xbaaab000 - 1024 * 1024 * 8, 0xbaaab000)
             s.memory.map_region(0x4347c000, 4096, 1)
 
-        s.register_plugin('posix', SimStateSystem(fs=fs))
+        s.register_plugin('posix', SimSystemPosix(fs=fs))
 
         # Create the CGC plugin
         s.get_plugin('cgc')
