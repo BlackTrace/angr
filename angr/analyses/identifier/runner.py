@@ -105,25 +105,17 @@ class Runner(object):
     def setup_state(self, function, test_data, initial_state=None, concrete_rand=False):
         # FIXME fdwait should do something concrete...
 
-        fs = {'/dev/stdin': SimFile(
-            "/dev/stdin", "r",
-            size=len(test_data.preloaded_stdin))}
-
         if initial_state is None:
-            temp_state = self.project.factory.entry_state(fs=fs)
             if self.base_state is None:
                 self.base_state = self._get_recv_state()
-            entry_state = self.base_state.copy()
-            entry_state.register_plugin("posix",temp_state.posix)
-            temp_state.release_plugin("posix")
-            entry_state.ip = function.startpoint.addr
         else:
             entry_state = initial_state.copy()
 
-        # set stdin
-        entry_state.cgc.input_size = len(test_data.preloaded_stdin)
-        if len(test_data.preloaded_stdin) > 0:
-            entry_state.posix.files[0].content.store(0, test_data.preloaded_stdin)
+        stdin = SimFile('stdin', content=test_data.preloaded_stdin)
+        stdout = SimFile('stdout')
+        stderr = SimFile('stderr')
+        fd = {0: stdin, 1: stdout, 2: stderr}
+        entry_state.register_plugin('posix', SimSystemPosix(stdin=stdin, stdout=stdout, stderr=stderr, fd=fd))
 
         entry_state.options.add(so.STRICT_PAGE_ACCESS)
 
@@ -297,14 +289,14 @@ class Runner(object):
             l.info("return val mismatch got %#x, expected %#x", result_state.se.eval(result), test_data.expected_return_val)
             return False
 
-        if result_state.se.symbolic(result_state.posix.files[1].pos):
+        if result_state.se.symbolic(result_state.posix.stdout.size):
             l.info("symbolic stdout pos")
             return False
 
-        if result_state.se.eval(result_state.posix.files[1].pos) == 0:
+        if result_state.se.eval(result_state.posix.stdout.size) == 0:
             stdout = ""
         else:
-            stdout = result_state.posix.files[1].content.load(0, result_state.posix.files[1].pos)
+            stdout = result_state.posix.stdout.load(0, result_state.posix.stdout.size)
             if stdout.symbolic:
                 l.info("symbolic stdout")
                 return False

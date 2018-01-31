@@ -10,6 +10,10 @@ class transmit(angr.SimProcedure):
         if angr.options.CGC_ENFORCE_FD in self.state.options:
             fd = 1
 
+        simfd = self.state.posix.get_fd(fd)
+        if simfd is None:
+            return -1
+
         if self.state.mode == 'fastpath':
             # Special case for CFG generation
             self.state.memory.store(tx_bytes, count, endness='Iend_LE')
@@ -17,7 +21,7 @@ class transmit(angr.SimProcedure):
 
         if ABSTRACT_MEMORY in self.state.options:
             data = self.state.memory.load(buf, count)
-            self.state.posix.write(fd, data, count)
+            simfd.write(fd, data, count)
 
             self.state.memory.store(tx_bytes, count, endness='Iend_LE')
 
@@ -38,7 +42,7 @@ class transmit(angr.SimProcedure):
                     return 2
 
                 data = self.state.memory.load(buf, count)
-                self.state.posix.write(fd, data, count)
+                simfd.write(data, count)
                 self.data = data
             else:
                 self.data = None

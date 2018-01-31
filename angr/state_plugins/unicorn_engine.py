@@ -983,13 +983,14 @@ class Unicorn(SimStatePlugin):
 
         # process the concrete transmits
         i = 0
+        stdin = self.state.posix.get_fd(1)
         while True:
             record = _UC_NATIVE.process_transmit(self._uc_state, i)
             if not bool(record):
                 break
 
             string = ctypes.string_at(record.contents.data, record.contents.count)
-            self.state.posix.write(1, string, record.contents.count)
+            stdin.write_data(string)
             i += 1
 
         if self.stop_reason in (STOP.STOP_NORMAL, STOP.STOP_SYSCALL):

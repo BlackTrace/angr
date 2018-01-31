@@ -26,7 +26,7 @@ class SimCGC(SimUserland):
                 **kwargs)
 
     # pylint: disable=arguments-differ
-    def state_blank(self, fs=None, **kwargs):
+    def state_blank(self, file_descriptors=None, **kwargs):
         s = super(SimCGC, self).state_blank(**kwargs)  # pylint:disable=invalid-name
 
         # Special stack base for CGC binaries to work with Shellphish CRS
@@ -37,7 +37,7 @@ class SimCGC(SimUserland):
             s.memory.mem._preapproved_stack = IRange(0xbaaab000 - 1024 * 1024 * 8, 0xbaaab000)
             s.memory.map_region(0x4347c000, 4096, 1)
 
-        s.register_plugin('posix', SimSystemPosix(fs=fs))
+        s.register_plugin('posix', SimSystemPosix(fd=file_descriptors))
 
         # Create the CGC plugin
         s.get_plugin('cgc')
@@ -81,16 +81,22 @@ class SimCGC(SimUserland):
 
             # Do all the writes
             writes_backer = self.project.loader.main_object.writes_backer
-            stdout = 1
+            stdout = state.posix.get_fd(1)
+            pos = 0
             for size in writes_backer:
                 if size == 0:
                     continue
-                str_to_write = state.posix.files[1].content.load(state.posix.files[1].pos, size)
-                a = SimActionData(state, 'file_1_0', 'write',
-                                  addr=claripy.BVV(state.posix.files[1].pos, state.arch.bits), data=str_to_write,
-                                  size=size)
-                state.posix.write(stdout, str_to_write, size)
+                str_to_write = state.solver.BVS('file_write', size*8)
+                a = SimActionData(
+                        state,
+                        'file_1_0',
+                        'write',
+                        addr=claripy.BVV(pos, state.arch.bits),
+                        data=str_to_write,
+                        size=size)
+                stdout.write_data(str_to_write)
                 state.history.add_action(a)
+                pos += size
 
         else:
             # Set CGC-specific variables

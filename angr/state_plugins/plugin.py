@@ -52,7 +52,9 @@ class SimStatePlugin(Plugin):
         """
         A decorator function you should apply to ``copy``
         """
-        def inner(self, memo, **kwargs):
+        def inner(self, memo=None, **kwargs):
+            if memo is None:
+                memo = {}
             if id(self) in memo:
                 return memo[id(self)]
             else:
@@ -65,6 +67,22 @@ class SimStatePlugin(Plugin):
         """
         Should merge the state plugin with the provided others. This will be called by ``state.merge()`` after copying
         the target state, so this should mutate the current instance to merge with the others.
+
+        Note that when multiple instances of a single plugin object (for example, a file) are referenced in the state,
+        it is important that merge only ever be called once. This should be solved by designating one of the plugin's referees as the "real owner", who should be the one to actually merge it.
+        This technique doesn't work to resolve the similar issue that arises during copying because merging doesn't produce a new reference to insert.
+
+        There will be n ``others`` and n+1 merge conditions, since the first condition corresponds to self.
+        To match elements up to conditions, say ``zip([self] + others, merge_conditions)``
+
+        When implementing this, make sure that you "deepen" both ``others`` and ``common_ancestor`` before calling sub-elements' merge methods,
+        e.g. ``self.foo.merge([o.foo for o in others], merge_conditions, common_ancestor=common_ancestor.foo if common_ancestor is not None else None)``.
+
+        During static analysis, merge_conditions can be None, in which case you should use ``state.solver.union(values)``.
+        TODO: fish please make this less bullshit
+
+        There is a utility ``state.solver.ite_cases`` which will help with constructing arbitrarily large merged ASTs.
+        Use it like ``self.bar = self.state.solver.ite_cases(zip(conditions[1:], [o.bar for o in others]), self.bar)``
 
         :param others: the other state plugins to merge with
         :param merge_conditions: a symbolic condition for each of the plugins

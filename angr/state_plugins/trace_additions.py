@@ -256,9 +256,9 @@ def exit_hook(state):
     # track the amount of stdout we had when a constraint was first added to a byte of stdin
     chall_resp_plugin = state.get_plugin("chall_resp_info")
     stdin_min_stdout_constraints = chall_resp_plugin.stdin_min_stdout_constraints
-    stdout_pos = state.se.eval(state.posix.get_file(1).pos)
+    stdout_pos = state.se.eval(state.posix.stdout.size)
     for v in guard.variables:
-        if v.startswith("file_/dev/stdin"):
+        if v.startswith("file_/dev/stdin"): # TODO THIS IS SO FUCKED LMAO
             byte_num = ChallRespInfo.get_byte(v)
             if byte_num not in stdin_min_stdout_constraints:
                 stdin_min_stdout_constraints[byte_num] = stdout_pos
@@ -272,8 +272,8 @@ def syscall_hook(state):
     if syscall_name == "receive":
         # track the amount of stdout we had when we first read the byte
         stdin_min_stdout_reads = state.get_plugin("chall_resp_info").stdin_min_stdout_reads
-        stdout_pos = state.se.eval(state.posix.get_file(1).pos)
-        stdin_pos = state.se.eval(state.posix.get_file(0).pos)
+        stdout_pos = state.se.eval(state.posix.get_fd(1).tell())
+        stdin_pos = state.se.eval(state.posix.get_fd(0).tell())
         for i in range(0, stdin_pos):
             if i not in stdin_min_stdout_reads:
                 stdin_min_stdout_reads[i] = stdout_pos
@@ -379,9 +379,9 @@ class ChallRespInfo(angr.state_plugins.SimStatePlugin):
         return byte_indices
 
     def get_stdout_indices(self, variable):
-        file_1 = self.state.posix.get_file(1)
-        stdout_size = self.state.se.eval(file_1.pos)
-        stdout = file_1.content.load(0, stdout_size)
+        file_1 = self.state.posix.stdout
+        stdout_size = self.state.se.eval(file_1.size)
+        stdout = file_1.load(0, stdout_size)
         byte_indices = set()
         for int_val, str_val in self.int_to_str_pairs:
             if variable in int_val.variables:
@@ -464,8 +464,8 @@ class ChallRespInfo(angr.state_plugins.SimStatePlugin):
             chall_resp_plugin = state.get_plugin("chall_resp_info")
 
             vars_to_solve = []
-            pos = state.se.eval(state.posix.get_file(0).pos)
-            stdin = state.posix.get_file(0).content.load(0, pos)
+            pos = state.se.eval(state.posix.stdin.size)
+            stdin = state.posix.stdin.load(0, pos)
             vars_to_solve.append(stdin)
 
             for _, int_var in chall_resp_plugin.str_to_int_pairs:

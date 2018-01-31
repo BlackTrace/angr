@@ -13,6 +13,10 @@ class receive(angr.SimProcedure):
         if angr.options.CGC_ENFORCE_FD in self.state.options:
             fd = 0
 
+        simfd = self.state.posix.get_fd(fd)
+        if simfd is None:
+            return -1
+
         if self.state.mode == 'fastpath':
             # Special case for CFG generation
             if not self.state.se.symbolic(count):
@@ -41,12 +45,11 @@ class receive(angr.SimProcedure):
             if not writable:
                 return 2
 
-            read_length = self.state.posix.read(fd, buf, count)
-
+            read_length = simfd.read(buf, count)
             self.state.memory.store(rx_bytes, read_length, condition=rx_bytes != 0, endness='Iend_LE')
             self.size = read_length
 
-            return self.state.se.BVV(0, self.state.arch.bits)
+            return 0
         else:
             if ABSTRACT_MEMORY in self.state.options:
                 actual_size = count
@@ -55,7 +58,7 @@ class receive(angr.SimProcedure):
                 self.state.add_constraints(self.state.se.ULE(actual_size, count), action=True)
 
             if self.state.se.solution(count != 0, True):
-                read_length = self.state.posix.read(fd, buf, actual_size)
+                read_length = simfd.read(buf, actual_size)
                 action_list = list(self.state.history.recent_actions)
 
                 try:

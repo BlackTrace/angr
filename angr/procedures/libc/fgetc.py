@@ -17,15 +17,10 @@ class fgetc(angr.SimProcedure):
             fd = self.inline_call(fileno, stream).ret_expr
             simfile = self.state.posix.get_file(fd)
 
-        pos = simfile.pos
-        limit = 1 if simfile.size is None else self.state.se.max_int(simfile.size - pos)
+        if simfile is None:
+            return -1
 
-        if limit != 0:
-            data = simfile.read_from(1)
-            data = data.zero_extend(self.state.arch.bits - len(data))
-        else:
-            data = -1 #EOF
-            data = self.state.solver.BVV(data, self.state.arch.bits)
-        return data
+        real_length, data = simfile.read_data(1)
+        return self.state.solver.If(real_length == 0, -1, data.zero_extend(self.state.arch.bits - 8))
 
 getc = fgetc

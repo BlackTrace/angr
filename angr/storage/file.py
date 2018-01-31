@@ -15,8 +15,9 @@ dialogue_counter = itertools.count()
 
 class Flags: # pylint: disable=W0232,
     O_RDONLY = 0
-    O_WRTONLY = 1
+    O_WRONLY = 1
     O_RDWR = 2
+    O_ACCMODE = 3 # bitmask for read/write mode
     O_APPEND = 4096
     O_ASYNC = 64
     O_CLOEXEC = 512
@@ -83,7 +84,7 @@ class SimFileBase(SimStatePlugin):
 
         :param pos:     The offset in the file to read from. May be ignored if the file is a stream or device.
         :param size:    The size to read. May be symbolic.
-        :return:        A tuple of the data read (a bitvector of the length that is the maximum length of the read) and the actual size of the read.
+        :return:        A tuple of the data read (a bitvector of the length that is the maximum length of the read), the actual size of the read, and the new file position pointer.
         """
         raise NotImplementedError
 
@@ -95,6 +96,7 @@ class SimFileBase(SimStatePlugin):
         :param data:    The data to write as a bitvector
         :param size:    The optional size of the data to write. If not provided will default to the length of the data.
                         Must be constrained to less than or equal to the size of the data.
+        :return:        The new file position pointer.
         """
         raise NotImplementedError
 
@@ -168,16 +170,17 @@ class SimFile(SimFileBase, SimSymbolicMemory):
             # it's not possible to EOF
             # we don't need to constrain or min/max the output size because there are already constraints asserting
             # that the total filesize is pretty big
-            return self.load(pos, size), size
+            return self.load(pos, size), size, size + pos
 
     def write(self, pos, data, size=None):
         if size is None:
             size = len(data) // 8
         # \(_^^)/
         self.store(pos, data, size=size)
+        new_end = _deps_unpack(pos + size)[0] # decline to store SAO
         if self.size is not None:
-            new_end = _deps_unpack(pos + size)[0] # decline to store SAO
             self.size = claripy.If(new_end > self.size, new_end, self.size)
+        return new_end
 
     @SimStatePlugin.memo
     def copy(self, _):
@@ -195,23 +198,23 @@ class SimFile(SimFileBase, SimSymbolicMemory):
 
     def merge(self, others, merge_conditions, common_ancestor=None):
         if not all(isinstance(o, SimFile) for o in others):
-            raise SimMergeError("Can't merge files of disparate type")
+            raise SimMergeError("Cannot merge files of disparate type")
 
         all_files = list(others) + [ self ]
 
         if all(o.size is None for o in all_files):
             pass
         elif any(o.size is None for o in all_files):
-            raise SimMergeError("Can't merge files where some have sizes and some don't")
+            raise SimMergeError("Cannot merge files where some have sizes and some don't")
         else:
-            self.size = self.state.solver.ite_cases(zip(merge_conditions, (o.size for o in others)), self.size)
+            self.size = self.state.solver.ite_cases(zip(merge_conditions[1:], (o.size for o in others)), self.size)
 
         return super(SimFile, self).merge(
             [ super(SimFile, o) for o in others ], merge_conditions, common_ancestor
         )
 
-    def widen(self, others):
-        return self.merge(others, []) # TODO this seems... wrong
+    def widen(self, _):
+        raise SimMergeError("Widening the filesystem is unsupported")
 
 
 class SimPackets(SimFileBase):
@@ -228,11 +231,11 @@ class SimPackets(SimFileBase):
     :param name:        The name of the file, for cosmetic purposes
     :param write_mode:  Whether this file is opened in read or write mode. If this is unspecified it will be
                         autodetected.
-    :param content:     Some initial content to use for the file. Can be a list of bytestrings or a list of tuples in
-                        the format of the content instance variable below.
+    :param content:     Some initial content to use for the file. Can be a list of bytestrings or a list SimPacket
+                        objects (not SimPackets! individual packets! welcome to OO hell!)
 
     :ivar write_mode:   See the eponymous parameter
-    :ivar content:      A list of packets, tuples of data (as a bitvector with the maximum length the packet could be)
+    :ivar content:      A list of packets, as SimPacket objects
                         and the actual length of the packet
     """
     def __init__(self, name, write_mode=None, content=None, writable=True, ident=None, **kwargs):
@@ -287,7 +290,7 @@ class SimPackets(SimFileBase):
             self.state.solver.add(size <= realsize)
             if not self.state.solver.satisfiable():
                 raise SimFileError("Packet read size constraint made state unsatisfiable???")
-            return self.content[addr]
+            return self.content[addr] + (addr+1,)
 
         # The read is on the frontier. let's generate a new packet.
         orig_size = size
@@ -317,7 +320,7 @@ class SimPackets(SimFileBase):
         data = claripy.BVS('packet_%d_%s' % (len(self.content), self.ident), max_size * 8)
         packet = (data, size)
         self.content.append(packet)
-        return packet
+        return packet + (addr+1,)
 
     def write(self, addr, data, size=None):
         """
@@ -326,6 +329,7 @@ class SimPackets(SimFileBase):
         :param int addr:    The packet number to write in the sequence of the stream. May be None to append to the stream.
         :param data:        The data to write, as a string or bitvector.
         :param size:        The optional size to write. May be symbolic; must be constrained to at most the size of data.
+        :return:            The next packet to use after this
         """
         # sanity check on read/write modes
         if self.write_mode is None:
@@ -350,10 +354,11 @@ class SimPackets(SimFileBase):
             self.state.solver.add(size == realsize)
             if not self.state.solver.satisfiable():
                 raise SimFileError("Packet write equality constraints made state unsatisfiable???")
-            return
+            return addr+1
 
         # write it out!
         self.content.append((data, size))
+        return addr+1
 
     @SimStatePlugin.memo
     def copy(self, memo):
@@ -366,94 +371,146 @@ class SimPackets(SimFileBase):
             elif self.write_mode is None:
                 self.write_mode = o.write_mode
             elif self.write_mode is not o.write_mode:
-                raise SimMergeError("Can't merge SimPackets with disparate write_mode")
+                raise SimMergeError("Cannot merge SimPackets with disparate write_mode")
 
         for o in others:
             if len(o.content) != len(self.content):
-                l.warning("Can't merge SimPackets with disparate number of packets")
-                return False
+                raise SimMergeError("Cannot merge SimPackets with disparate number of packets")
 
         for i, default in enumerate(self.content):
             max_data_length = max(len(default[0]), max(len(o.content[i][0]) for o in others))
             merged_data = self.state.solver.ite_cases(
                 zip(
-                    conditions,
+                    conditions[1:],
                     (o.content[i][0].concat(claripy.BVV(0, max_data_length - len(o.content[i][0]))) for o in others)
                 ), default[0])
-            merged_size = self.state.solver.ite_cases(zip(conditions, (o.content[i][1] for o in others)), default[1])
+            merged_size = self.state.solver.ite_cases(zip(conditions[1:], (o.content[i][1] for o in others)), default[1])
             self.content[i] = (merged_data, merged_size)
 
         return True
 
-    def widen(self, others):
-        return self.merge(others, [])
+    def widen(self, _):
+        raise SimMergeError("Widening the filesystem is unsupported")
 
-class SimFileConcrete(SimFileBase):
+class SimPacket(object):
     """
-    A SimFile which forwards all its reads and writes to the host filesystem.
-
-    :param host_path:   The path in the host filesystem to use
-    :param writable:    Whether to open this file for writing. If the file may not be opened for writing, this will be
-                        ignored.
+    An individual packet of data. This is a base class for representing several kinds of packet data.
     """
-    def __init__(self, host_path, writable=False):
-        super(SimFileConcrete, self).__init__(host_path, writable=writable)
-        self.host_path = host_path
-        try:
-            self.host_file = open(host_path, 'r+b' if writable else 'rb')
-        except OSError:
-            if not writable:
-                raise
-            self.host_file = open(host_path, 'rb')
+    max_length = None
+    sym_length = None
 
-    def concretize(self):
-        self.host_file.seek(0)
-        return self.host_file.read()
+    def decompose(self):
+        """
+        Return data and constraints necessary to represent this packet in a flat address space
+        """
+        raise NotImplementedError
 
-    def read(self, pos, size):
-        conc_size = self.state.solver.max(size)
-        if self.state.solver.symbolic(size):
-            self.state.solver.add(size == conc_size)
-            l.info("Concretizing read size for concrete filesystem to %d", conc_size)
+    def concretize(self, state):
+        """
+        Return a string for the packet satisfying the constraints currently on the state
+        """
+        raise NotImplementedError
 
-        conc_pos = self.state.solver.eval(pos)
-        self.state.solver.add(pos == conc_pos)
+    def concat(self, *others):
+        members = sum(x.members if type(x) is SimPacketConcat else [x] for x in [self] + others)
+        return SimPacketConcat(members)
 
-        self.host_file.seek(conc_pos)
-        data = self.host_file.read(conc_size)
-        return self.state.solver.BVV(data), len(data)
+class SimPacketConstant(SimPacket):
+    def __init__(self, string):
+        self.string = string
+        self.max_length = len(string)
+        self.sym_length = claripy.BVV(self.max_length, 64)
 
-    def write(self, pos, data, size=None):
-        if size is None:
-            size = len(data)
+    def concretize(self, state):
+        return self.string
 
-        conc_size = self.state.solver.max(size)
-        if self.state.solver.symbolic(size):
-            self.state.solver.add(size == conc_size)
-            l.info("Concretizing write size for concrete filesystem to %d", conc_size)
+class SimPacketString(SimPacket):
+    pass # variable length string with character membership restrictions
 
-        data_slice = data.get_bytes(0, conc_size)
-        conc_data = self.state.solver.eval(data_slice, cast_to=str)
-        if self.state.solver.symbolic(data_slice):
-            self.state.solver.add(data_slice == conc_data)
-            l.info("Concretizing write data for concrete filesystem to %r", conc_data)
+class SimPacketInteger(SimPacket): # TODO: unsigned, other representations
+    def __init__(self, state, name, bits):
+        self.max_length = len(str(2**bits - 1)) + 1
+        self.integer = state.solver.BVS(name, bits)
 
-        conc_pos = self.state.solver.eval(pos)
-        self.state.solver.add(pos == conc_pos)
+    def concretize(self, state):
+        return str(state.solver.eval(self.integer))
 
-        self.host_file.seek(conc_pos)
-        self.host_file.write(conc_data)
+class SimPacketConcat(SimPacket):
+    def __init__(self, members):
+        self.members = members
+        self.max_length = sum(x.max_length for x in self.members)
+        self.sym_length = sum(x.sym_length for x in self.members)
 
-    def copy(self, _):
-        # this holds no mutable data
-        return self
+    def concretize(self, state):
+        return ''.join(member.concretize(state) for member in self.members)
 
-    def merge(self, others, conditions, ancestor=None): # pylint: disable=unused-argument
-        l.error("The concept of merging concrete files doesn't make sense...")
-        return False
 
-    def widen(self, others):
-        return self.merge(others, [])
+#class SimFileConcrete(SimFileBase):
+#    """
+#    A SimFile which forwards all its reads and writes to the host filesystem.
+#
+#    :param host_path:   The path in the host filesystem to use
+#    :param writable:    Whether to open this file for writing. If the file may not be opened for writing, this will be
+#                        ignored.
+#    """
+#    def __init__(self, host_path, writable=False):
+#        super(SimFileConcrete, self).__init__(host_path, writable=writable)
+#        self.host_path = host_path
+#        try:
+#            self.host_file = open(host_path, 'r+b' if writable else 'rb')
+#        except OSError:
+#            if not writable:
+#                raise
+#            self.host_file = open(host_path, 'rb')
+#
+#    def concretize(self):
+#        self.host_file.seek(0)
+#        return self.host_file.read()
+#
+#    def read(self, pos, size):
+#        conc_size = self.state.solver.max(size)
+#        if self.state.solver.symbolic(size):
+#            self.state.solver.add(size == conc_size)
+#            l.info("Concretizing read size for concrete filesystem to %d", conc_size)
+#
+#        conc_pos = self.state.solver.eval(pos)
+#        self.state.solver.add(pos == conc_pos)
+#
+#        self.host_file.seek(conc_pos)
+#        data = self.host_file.read(conc_size)
+#        return self.state.solver.BVV(data), len(data)
+#
+#    def write(self, pos, data, size=None):
+#        if size is None:
+#            size = len(data)
+#
+#        conc_size = self.state.solver.max(size)
+#        if self.state.solver.symbolic(size):
+#            self.state.solver.add(size == conc_size)
+#            l.info("Concretizing write size for concrete filesystem to %d", conc_size)
+#
+#        data_slice = data.get_bytes(0, conc_size)
+#        conc_data = self.state.solver.eval(data_slice, cast_to=str)
+#        if self.state.solver.symbolic(data_slice):
+#            self.state.solver.add(data_slice == conc_data)
+#            l.info("Concretizing write data for concrete filesystem to %r", conc_data)
+#
+#        conc_pos = self.state.solver.eval(pos)
+#        self.state.solver.add(pos == conc_pos)
+#
+#        self.host_file.seek(conc_pos)
+#        self.host_file.write(conc_data)
+#
+#    def copy(self, _):
+#        # this holds no mutable data
+#        return self
+#
+#    def merge(self, others, conditions, ancestor=None): # pylint: disable=unused-argument
+#        l.error("The concept of merging concrete files doesn't make sense...")
+#        return False
+#
+#    def widen(self, others):
+#        return self.merge(others, [])
 
 
 class SimFileDescriptorBase(SimStatePlugin):
@@ -465,52 +522,100 @@ class SimFileDescriptorBase(SimStatePlugin):
 
     def read(self, addr, size):
         """
-        Reads some data from the file.
+        Reads some data from the file, storing it into memory.
 
         :param addr:    The address to write the read data into memory
         :param size:    The requested length of the read
         :return:        The real length of the read
         """
-        raise NotImplementedError
+        data, realsize = self.read_data(size)
+        self.state.memory.store(addr, data, size=realsize)
+        return realsize
 
     def write(self, addr, size):
         """
-        Writes some data into the file.
+        Writes some data, loaded from the state, into the file.
 
         :param addr:    The address to read the data to write from in memory
         :param size:    The requested size of the write
         :return:        The real length of the write
         """
+        if type(addr) is str:
+            raise TypeError("SimFileDescriptor.write takes an address and size. Did you mean write_data?")
+        data = self.state.memory.load(addr, size)
+        return self.write_data(data, size)
+
+    def read_data(self, size):
+        """
+        Reads some data from the file, returning the data.
+
+        :param size:    The requested length of the read
+        :return:        A tuple of the real length of the read and the data read
+        """
         raise NotImplementedError
 
-    @staticmethod
-    def _do_read(simfile, pos, addr, size):
+    def write_data(self, data, size=None):
+        """
+        Write some data, provided as an argument into the file.
+
+        :param data:    A bitvector to write into the file
+        :param size:    The requested size of the write (may be symbolic)
+        :return:        The real length of the write
+        """
+        raise NotImplementedError
+
+    def seek(self, pos, whence='start'):
+        """
+        Seek the file descriptor to a different position in the file.
+
+        :param offset:  The offset to seek to, interpreted according to whence
+        :param whence:  What the offset is relative to; one of the strings "start", "current", or "end"
+        :return:        A symbolic boolean describing whether the seek succeeded or not
+        """
+        raise NotImplementedError
+
+    def tell(self):
+        """
+        Return the current position, or None if the concept doesn't make sense for the given file.
+        """
+        raise NotImplementedError
+
+    def eof(self):
+        """
+        Return the EOF status. May be a symbolic boolean.
+        """
+        raise NotImplementedError
+
+    @property
+    def read_storage(self):
+        """
+        Return the SimFile backing reads from this fd
+        """
+        raise NotImplementedError
+
+    @property
+    def write_storage(self):
+        """
+        Return the SimFile backing writes to this fd
+        """
+        raise NotImplementedError
+
+    def _prep_read(self, size):
+        return self._prep_generic(size, True)
+    def _prep_write(self, size):
+        return self._prep_generic(size, False)
+
+    def _prep_generic(self, size, is_read):
+        option = sim_options.CONCRETIZE_SYMBOLIC_FILE_READ_SIZES if is_read else sim_options.CONCRETIZE_SYMBOLIC_WRITE_SIZES
+        string = 'read' if is_read else 'write'
         # check if we need to concretize the length
-        if sim_options.CONCRETIZE_SYMBOLIC_FILE_READ_SIZES in simfile.state.options \
-                and simfile.state.se.symbolic(size):
+        if option in self.state.options and self.state.solver.symbolic(size):
             try:
-                size = simfile.state.solver.max(size, extra_constraints=(size <= simfile.state.libc.max_packet_size,))
+                size = self.state.solver.max(size, extra_constraints=(size <= self.state.libc.max_packet_size,))
             except SimSolverError:
-                size = simfile.state.solver.min(size)
-            l.info("Concretizing symbolic read size to %d", size)
+                size = self.state.solver.min(size)
+            l.info("Concretizing symbolic %s size to %d", string, size)
 
-        data, realsize = simfile.read(pos, size)
-        simfile.state.memory.write(addr, data, size=realsize)
-        return realsize
-
-    @staticmethod
-    def _do_write(simfile, pos, addr, size):
-        # check if we need to concretize the length
-        if sim_options.CONCRETIZE_SYMBOLIC_WRITE_SIZES in simfile.state.options \
-                and simfile.state.se.symbolic(size):
-            try:
-                size = simfile.state.solver.max(size, extra_constraints=(size <= simfile.state.libc.max_packet_size,))
-            except SimSolverError:
-                size = simfile.state.solver.min(size)
-            l.info("Concretizing symbolic write size to %d", size)
-
-        data = simfile.state.memory.read(addr, size)
-        simfile.write(pos, data, size)
         return size
 
 class SimFileDescriptor(SimFileDescriptorBase):
@@ -527,37 +632,23 @@ class SimFileDescriptor(SimFileDescriptorBase):
         self._pos = 0
         self.flags = flags
 
-    def read(self, addr, size):
-        realsize = self._do_read(self.file, self._pos, addr, size)
+    def read_data(self, size):
+        size = self._prep_read(size)
+        data, realsize, self._pos = self.file.read(self._pos, size)
+        return data, realsize
 
-        if hasattr(self.file, 'size'):
-            self._pos = _deps_unpack(self._pos + realsize)[0]
-        else:
-            self._pos += 1
-
-        return realsize
-
-    def write(self, addr, size):
-        if self.flags & Flags.O_APPEND and hasattr(self.file, 'size'):
+    def write_data(self, data, size=None):
+        if self.flags & Flags.O_APPEND and getattr(self.file, 'size', None) is not None:
             self._pos = self.file.size
 
-        realsize = self._do_write(self.file, self._pos, addr, size)
+        if size is None:
+            size = self.state.solver.BVV(len(data)//8, self.state.arch.bits)
 
-        if hasattr(self.file, 'size'):
-            self._pos = _deps_unpack(self._pos + realsize)[0]
-        else:
-            self._pos += 1
-
-        return realsize
+        size = self._prep_write(size)
+        self._pos = self.file.write(self._pos, data, size)
+        return size
 
     def seek(self, offset, whence='start'):
-        """
-        Seek the file descriptor to a different position in the file.
-
-        :param offset:  The offset to seek to, interpreted according to whence
-        :param whence:  What the offset is relative to; one of the strings "start", "current", or "end"
-        :return:        A symbolic boolean describing whether the seek succeeded or not
-        """
         if not self.file.seekable:
             return claripy.false
 
@@ -567,7 +658,7 @@ class SimFileDescriptor(SimFileDescriptorBase):
             new_pos = self._pos + offset
         elif whence == 'end':
             if self.file.size is None:
-                raise SimFileError("Can't seek based on end of file with no end")
+                raise SimFileError("Cannot seek based on end of file with no end")
             new_pos = self.file.size + offset
 
         success_condition = claripy.SGE(new_pos, 0)
@@ -576,13 +667,24 @@ class SimFileDescriptor(SimFileDescriptorBase):
         self._pos = _deps_unpack(claripy.If(success_condition, new_pos, self._pos))[0]
         return success_condition
 
+    def eof(self):
+        if not self.file.seekable:
+            return claripy.false
+        if self.file.size is None:
+            return claripy.false
+        return self._pos == self.file.size
+
     def tell(self):
-        """
-        :return:    The current offset in the file, or None if the file has no concept of offsets
-        """
         if self.file.seekable:
             return None
         return self._pos
+
+    @property
+    def read_storage(self):
+        return self.file
+    @property
+    def write_storage(self):
+        return self.file
 
     def set_state(self, state):
         super(SimFileDescriptor, self).set_state(state)
@@ -595,6 +697,7 @@ class SimFileDescriptor(SimFileDescriptorBase):
         return c
 
     def merge(self, others, conditions, ancestor=None):
+        # do NOT merge file content - descriptors do not have ownership, prevent duplicate merging
         if not all(type(o) is type(self) for o in others):
             l.error("Cannot merge SimFileDescriptors of disparate types")
             return False
@@ -603,16 +706,16 @@ class SimFileDescriptor(SimFileDescriptorBase):
             return False
 
         if hasattr(self.file, 'size'):
-            self._pos = self.state.solver.ite_cases(zip(conditions, (o._pos for o in others)), self._pos)
+            self._pos = self.state.solver.ite_cases(zip(conditions[1:], (o._pos for o in others)), self._pos)
         else:
             if not all(o._pos == self._pos for o in others):
                 l.error("Cannot merge SimFileDescriptors over SimPackets with disparate number of packets")
                 return False
 
-        return self.file.merge([o.file for o in others], conditions, ancestor)
+        return True
 
-    def widen(self, others):
-        return self.merge(others, [])
+    def widen(self, _):
+        raise SimMergeError("Widening the filesystem is unsupported")
 
 class SimFileDescriptorDuplex(SimFileDescriptorBase):
     """
@@ -620,74 +723,77 @@ class SimFileDescriptorDuplex(SimFileDescriptorBase):
 
     :param read_file:   The SimFile to read from
     :param write_file:  The SimFile to write to
-
-    :ivar read_file:
-    :ivar write_file:
     """
     def __init__(self, read_file, write_file):
         super(SimFileDescriptorDuplex, self).__init__()
-        self.read_file = read_file
-        self.write_file = write_file
+        self._read_file = read_file
+        self._write_file = write_file
 
         self._read_pos = 0
         self._write_pos = 0
 
-    def read(self, addr, size):
-        realsize = self._do_read(self.read_file, self._read_pos, addr, size)
+    def read_data(self, size):
+        size = self._prep_read(size)
+        data, realsize, self._read_pos = self._read_file.read(self._read_pos, size)
+        return data, realsize
 
-        if hasattr(self.read_file, 'size'):
-            self._read_pos = _deps_unpack(self._read_pos + realsize)[0]
-        else:
-            self._read_pos += 1
+    def write_data(self, data, size=None):
+        if size is None:
+            size = self.state.solver.BVV(len(data)//8, self.state.arch.bits)
 
-        return realsize
-
-    def write(self, addr, size):
-        realsize = self._do_write(self.write_file, self._write_pos, addr, size)
-
-        if hasattr(self.write_file, 'size'):
-            self._write_pos = _deps_unpack(self._write_pos + realsize)[0]
-        else:
-            self._write_pos += 1
-
-        return realsize
+        size = self._prep_write(size)
+        self._write_pos = self._write_file.write(self._write_pos, data, size)
+        return size
 
     def set_state(self, state):
         super(SimFileDescriptorDuplex, self).set_state(state)
-        self.read_file.set_state(state)
-        self.write_file.set_state(state)
+        self._read_file.set_state(state)
+        self._write_file.set_state(state)
+
+    def eof(self):
+        return claripy.false
+
+    def tell(self):
+        return None
+
+    def seek(self, pos, whence='start'):
+        return claripy.false
+
+    @property
+    def read_storage(self):
+        return self._read_file
+    @property
+    def write_storage(self):
+        return self._write_file
 
     @SimStatePlugin.memo
     def copy(self, memo):
-        c = SimFileDescriptorDuplex(self.read_file.copy(memo), self.write_file.copy(memo))
+        c = SimFileDescriptorDuplex(self._read_file.copy(memo), self._write_file.copy(memo))
         c._read_pos = self._read_pos
         c._write_pos = self._write_pos
         return c
 
     def merge(self, others, conditions, ancestor=None):
+        # do NOT merge storage mechanisms here - fs and posix handle that
         if not all(type(o) is type(self) for o in others):
-            l.error("Cannot merge SimFileDescriptors of disparate types")
-            return False
+            raise SimMergeError("Cannot merge SimFileDescriptors of disparate types")
 
-        if hasattr(self.read_file, 'size'):
-            self._read_pos = self.state.solver.ite_cases(zip(conditions, (o._read_pos for o in others)), self._read_pos)
+        if hasattr(self._read_file, 'size'):
+            self._read_pos = self.state.solver.ite_cases(zip(conditions[1:], (o._read_pos for o in others)), self._read_pos)
         else:
             if not all(o._read_pos == self._read_pos for o in others):
-                l.error("Cannot merge SimFileDescriptors over SimPackets with disparate number of packets")
-                return False
+                raise SimMergeError("Cannot merge SimFileDescriptors over SimPackets with disparate number of packets")
 
-        if hasattr(self.write_file, 'size'):
-            self._write_pos = self.state.solver.ite_cases(zip(conditions, (o._write_pos for o in others)), self._write_pos)
+        if hasattr(self._write_file, 'size'):
+            self._write_pos = self.state.solver.ite_cases(zip(conditions[1:], (o._write_pos for o in others)), self._write_pos)
         else:
             if not all(o._write_pos == self._write_pos for o in others):
-                l.error("Cannot merge SimFileDescriptors over SimPackets with disparate number of packets")
-                return False
+                raise SimMergeError("Cannot merge SimFileDescriptors over SimPackets with disparate number of packets")
 
-        return self.read_file.merge([o.read_file for o in others], conditions, ancestor) \
-            and self.write_file.merge([o.write_file for o in others], conditions, ancestor)
+        return True
 
-    def widen(self, others):
-        return self.merge(others, [])
+    def widen(self, _):
+        raise SimMergeError("Widening the filesystem is unsupported")
 
 # OLD
 #class SimFile(SimStatePlugin):
