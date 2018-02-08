@@ -768,13 +768,22 @@ class SimulationManager(ana.Storable):
         else:
             return m
 
-    def merge(self, merge_func=None, stash=None):
+    @staticmethod
+    def _merge_key(state):
+        return (state.addr if not state.regs._ip.symbolic else 'SYMBOLIC',
+                [x.func_addr for x in state.callstack],
+                set(state.posix.fd) if state.has_plugin('posix') else None)
+
+    def merge(self, merge_func=None, merge_key=None, stash=None):
         """
         Merge the states in a given stash.
 
         :param stash:       The stash (default: 'active')
         :param merge_func:  If provided, instead of using state.merge, call this function with the states as the argument.
                             Should return the merged state.
+        :param merge_key:   If provided, should be a function that takes a state and returns a key that will compare
+                            equal for all states that are allowed to be merged together, as a first aproximation.
+                            By default: uses PC, callstack, and open file descriptors.
 
         :returns:           The result SimulationManager.
         :rtype:             SimulationManager
@@ -783,10 +792,12 @@ class SimulationManager(ana.Storable):
         self.prune(from_stash=stash)
         to_merge = self.stashes[stash]
         not_to_merge = [ ]
+        if merge_key is None: merge_key = self._merge_key
 
         merge_groups = [ ]
         while len(to_merge) > 0:
-            g, to_merge = self._filter_states(lambda s: s.addr == to_merge[0].addr, to_merge)
+            base_key = merge_key(to_merge[0])
+            g, to_merge = self._filter_states(lambda s: base_key == merge_key(s), to_merge)
             if len(g) <= 1:
                 not_to_merge.extend(g)
             else:
