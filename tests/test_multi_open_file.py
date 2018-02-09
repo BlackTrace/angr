@@ -22,10 +22,16 @@ def run_test_multi_open_file():
     for p in pg.deadended:
         nose.tools.assert_true(p.posix.dumps(2) == "")
 
-        # Check that the temp file has what should be written to it
-        for path, f in p.posix.fs.iteritems():
-            if 'tmp' in path:
-                nose.tools.assert_true(p.posix.dump_file_by_path(path) == "foobar and baz")
+        # Check that the temp file was deleted
+        nose.tools.assert_equal(p.fs._files, {})
+
+        # Check that the deleted temp file contained the appropriate string
+        for event in p.history.events:
+            if event.type == 'fs_unlink':
+                nose.tools.assert_equal(event.objects['simfile'].concretize(), 'foobar and baz')
+                break
+        else:
+            assert False
 
 
 def test_multi_open_file():

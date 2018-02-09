@@ -120,7 +120,7 @@ def test_cgc_se1_palindrome_raw():
 
     simgr.use_technique(angr.exploration_techniques.CrashMonitor(trace=trace,
         crash_mode=crash_mode,
-        crash_addr=crash_addr))
+        crash_addr=crash_addr, trim_history=False))
     t = angr.exploration_techniques.Tracer(trace=trace)
     simgr.use_technique(t)
     simgr.use_technique(angr.exploration_techniques.Oppologist())

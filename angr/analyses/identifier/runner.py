@@ -9,7 +9,8 @@ from ...sim_type import SimTypeFunction, SimTypeInt
 from ... import sim_options as so
 from ... import SIM_LIBRARIES
 from ... import BP_BEFORE, BP_AFTER
-from ...storage.file import SimFile
+from ...storage.file import SimFile, SimFileDescriptor
+from ...state_plugins import SimSystemPosix
 from ...errors import AngrCallableMultistateError, AngrCallableError, AngrError, SimError
 from .custom_callable import IdentifierCallable
 from ...procedures import SIM_LIBRARIES
@@ -108,13 +109,14 @@ class Runner(object):
         if initial_state is None:
             if self.base_state is None:
                 self.base_state = self._get_recv_state()
+            entry_state = self.base_state.copy()
         else:
             entry_state = initial_state.copy()
 
         stdin = SimFile('stdin', content=test_data.preloaded_stdin)
         stdout = SimFile('stdout')
         stderr = SimFile('stderr')
-        fd = {0: stdin, 1: stdout, 2: stderr}
+        fd = {0: SimFileDescriptor(stdin, 0), 1: SimFileDescriptor(stdout, 0), 2: SimFileDescriptor(stderr, 0)}
         entry_state.register_plugin('posix', SimSystemPosix(stdin=stdin, stdout=stdout, stderr=stderr, fd=fd))
 
         entry_state.options.add(so.STRICT_PAGE_ACCESS)

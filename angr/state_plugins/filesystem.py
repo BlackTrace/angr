@@ -60,17 +60,17 @@ class SimFilesystem(SimStatePlugin): # pretends links don't exist
         for o in others:
             if o.cwd != self.cwd:
                 raise SimMergeError("Can't merge filesystems with disparate cwds")
-            if len(o.mountpoints) != len(self._mountpoints):
+            if len(o._mountpoints) != len(self._mountpoints):
                 raise SimMergeError("Can't merge filesystems with disparate mountpoints")
 
         for fname in self._mountpoints:
             try:
-                subdeck = [o.mountpoints[fname] for o in others]
+                subdeck = [o._mountpoints[fname] for o in others]
             except KeyError:
-                raise SimMergeError("Can't merge filesystems with disparate mountpoints")
+                raise SimMergeError("Can't merge filesystems with disparate file sets")
 
-            if common_ancestor is not None and fname in common_ancestor.mountpoints:
-                common_mp = common_ancestor.mountpoints[fname]
+            if common_ancestor is not None and fname in common_ancestor._mountpoints:
+                common_mp = common_ancestor._mountpoints[fname]
             else:
                 common_mp = None
 
@@ -78,18 +78,18 @@ class SimFilesystem(SimStatePlugin): # pretends links don't exist
 
         # this is a little messy
         deck = [self] + others
-        all_files = set.union(*(set(o.files.keys()) for o in deck))
+        all_files = set.union(*(set(o._files.keys()) for o in deck))
         for fname in all_files:
-            subdeck = [o.files[fname] if fname in o.files else None for o in deck]
+            subdeck = [o._files[fname] if fname in o._files else None for o in deck]
             representative = next(x for x in subdeck if x is not None)
-            for i, v in subdeck.iteritems():
+            for i, v in enumerate(subdeck):
                 if v is None:
                     subdeck[i] = representative()
                     if i == 0:
                         self._files[fname] = subdeck[i]
 
-            if common_ancestor is not None and fname in common_ancestor.files:
-                common_simfile = common_ancestor.files[fname]
+            if common_ancestor is not None and fname in common_ancestor._files:
+                common_simfile = common_ancestor._files[fname]
             else:
                 common_simfile = None
 
@@ -163,10 +163,16 @@ class SimFilesystem(SimStatePlugin): # pretends links don't exist
         Remove a file from the filesystem. Returns whether the operation was successful.
         """
         mountpoint, chunks = self.get_mountpoint(path)
+        apath = self._join_chunks(chunks)
 
         if mountpoint is None:
-            self._files[self._join_chunks(chunks)].pop(None)
-            return True
+            try:
+                simfile = self._files.pop(apath)
+            except KeyError:
+                return False
+            else:
+                self.state.history.add_event('fs_unlink', path=apath, simfile=simfile)
+                return True
         else:
             return mountpoint.delete(chunks)
 
@@ -309,7 +315,7 @@ class SimHostFilesystem(SimMount):
                 raise SimMergeError("Can't merge SimHostFilesystems with disparate deleted files")
 
         deck = [self] + others
-        all_files = set.union(*(set(o.files.keys()) for o in deck))
+        all_files = set.union(*(set(o._files.keys()) for o in deck))
         for fname in all_files:
             subdeck = []
             basecase = None

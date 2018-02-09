@@ -571,7 +571,8 @@ class SimAbstractMemory(SimMemory): #pylint:disable=abstract-method
             # The region doesn't exist. Then there is only one segment!
             return [ size ]
 
-    def copy(self):
+    @SimMemory.memo
+    def copy(self, memo):
         """
         Make a copy of this SimAbstractMemory object
         :return:
@@ -583,7 +584,7 @@ class SimAbstractMemory(SimMemory): #pylint:disable=abstract-method
             generic_region_map=self._generic_region_map
         )
         for region_id, region in self._regions.items():
-            am._regions[region_id] = region.copy()
+            am._regions[region_id] = region.copy(memo)
         am._stack_size = self._stack_size
         return am
 

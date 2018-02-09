@@ -219,13 +219,8 @@ def test_concrete_transmits():
     p = angr.Project(os.path.join(test_location, 'binaries/tests/cgc/PIZZA_00001'))
     inp = "320a310a0100000005000000330a330a340a".decode('hex')
 
-    s_unicorn = p.factory.entry_state(add_options=so.unicorn | {so.CGC_NO_SYMBOLIC_RECEIVE_LENGTH})
+    s_unicorn = p.factory.entry_state(add_options=so.unicorn | {so.CGC_NO_SYMBOLIC_RECEIVE_LENGTH}, stdin=inp)
     pg_unicorn = p.factory.simgr(s_unicorn)
-    stdin = s_unicorn.posix.get_file(0)
-    stdin.write(inp, len(inp))
-    stdin.seek(0)
-    stdin.size = len(inp)
-
     pg_unicorn.step(n=10)
 
     nose.tools.assert_equal(pg_unicorn.one_active.posix.dumps(1), '1) Add number to the array\n2) Add random number to the array\n3) Sum numbers\n4) Exit\nRandomness added\n1) Add number to the array\n2) Add random number to the array\n3) Sum numbers\n4) Exit\n  Index: \n1) Add number to the array\n2) Add random number to the array\n3) Sum numbers\n4) Exit\n')

@@ -8,19 +8,19 @@ from angr.sim_type import SimTypeInt, SimTypeFd
 
 class fgetc(angr.SimProcedure):
     # pylint:disable=arguments-differ
-    def run(self, stream, simfile=None):
+    def run(self, stream, simfd=None):
         self.argument_types = {0: SimTypeFd()}
         self.return_type = SimTypeInt(32, True)
 
-        if simfile is None:
+        if simfd is None:
             fileno = angr.SIM_PROCEDURES['posix']['fileno']
             fd = self.inline_call(fileno, stream).ret_expr
-            simfile = self.state.posix.get_file(fd)
+            simfd = self.state.posix.get_fd(fd)
 
-        if simfile is None:
+        if simfd is None:
             return -1
 
-        real_length, data = simfile.read_data(1)
+        data, real_length, = simfd.read_data(1)
         return self.state.solver.If(real_length == 0, -1, data.zero_extend(self.state.arch.bits - 8))
 
 getc = fgetc

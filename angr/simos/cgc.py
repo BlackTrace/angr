@@ -26,7 +26,7 @@ class SimCGC(SimUserland):
                 **kwargs)
 
     # pylint: disable=arguments-differ
-    def state_blank(self, file_descriptors=None, **kwargs):
+    def state_blank(self, **kwargs):
         s = super(SimCGC, self).state_blank(**kwargs)  # pylint:disable=invalid-name
 
         # Special stack base for CGC binaries to work with Shellphish CRS
@@ -36,8 +36,6 @@ class SimCGC(SimUserland):
         if o.ABSTRACT_MEMORY not in s.options:
             s.memory.mem._preapproved_stack = IRange(0xbaaab000 - 1024 * 1024 * 8, 0xbaaab000)
             s.memory.map_region(0x4347c000, 4096, 1)
-
-        s.register_plugin('posix', SimSystemPosix(fd=file_descriptors))
 
         # Create the CGC plugin
         s.get_plugin('cgc')

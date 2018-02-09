@@ -12,5 +12,4 @@ class putchar(angr.SimProcedure):
         if stdout is None:
             return -1
         stdout.write_data(string[7:0])
-        self.state.posix.write(1, string[7:0], 1)
         return string & 0xff

@@ -4,6 +4,7 @@ from collections import namedtuple
 from .plugin import SimStatePlugin
 from .filesystem import SimMount
 from ..storage.file import SimFile, SimPackets, Flags, SimFileDescriptor, SimFileDescriptorDuplex
+from .. import sim_options as options
 
 l = logging.getLogger("angr.state_plugins.posix")
 
@@ -94,7 +95,7 @@ class SimSystemPosix(SimStatePlugin):
             stderr=None,
             fd=None,
             sockets=None,
-            first_socket=None,
+            socket_queue=None,
             argv=None,
             argc=None,
             environ=None,
@@ -124,7 +125,7 @@ class SimSystemPosix(SimStatePlugin):
         self.autotmp_counter = 0
 
         self.sockets = sockets if sockets is not None else {}
-        self.first_socket = first_socket
+        self.socket_queue = socket_queue if socket_queue is not None else []
 
         if stdin is None:
             stdin = SimPackets('stdin', write_mode=False, writable=False, ident='stdin')
@@ -232,28 +233,49 @@ class SimSystemPosix(SimStatePlugin):
         simfile = self.state.fs.get(name)
         if simfile is None:
             if not writing:
-                return None
-            simfile = SimFile(name)
+                if not options.ALL_FILES_EXIST:
+                    return None
+                simfile = SimFile(name, size=self.state.solver.BVS('filesize_%s' % name, self.state.arch.bits, key=('file', name, 'filesize'), eternal=True))
+            else:
+                simfile = SimFile(name)
             if not self.state.fs.insert(name, simfile):
                 return None
 
         simfd = SimFileDescriptor(simfile, flags)
+        simfd.set_state(self.state)
         self.fd[fd] = simfd
         return fd
 
     def open_socket(self, ident):
         fd = self._pick_fd()
 
-        if ident not in self.sockets:
-            if self.first_socket is not None:
-                self.sockets[ident] = self.first_socket
-                self.first_socket = None
-            else:
-                read_file = SimPackets('socket %s read' % ident)
-                write_file = SimPackets('socket %s write' % ident)
-                self.sockets[ident] = (read_file, write_file)
+        # we need a sockpair, or a pair of storage mechanisms that will be duplexed to form the socket
+        # we can get them from either:
+        # a) the socket identifier store
+        # b) the socket queue
+        # c) making them ourselves
+        # in the latter two cases we need to attach them to the socket identifier store
 
-        simfd = SimFileDescriptorDuplex(*self.sockets[ident])
+        # control flow sucks. we should be doing our analysis with nothing but mov instructions
+        sockpair = None
+        if ident not in self.sockets:
+            if self.socket_queue:
+                sockpair = self.socket_queue.pop(0)
+                if sockpair is not None:
+                    memo = {}
+                    sockpair = sockpair[0].copy(memo), sockpair[1].copy(memo)
+
+            if sockpair is None:
+                read_file = SimPackets('socket %s read' % str(ident))
+                write_file = SimPackets('socket %s write' % str(ident))
+                sockpair = (read_file, write_file)
+
+            self.sockets[ident] = sockpair
+        else:
+            sockpair = self.sockets[ident]
+
+        simfd = SimFileDescriptorDuplex(sockpair[0], sockpair[1])
+        simfd.set_state(self.state)
         self.fd[fd] = simfd
         return fd
 
@@ -370,8 +392,8 @@ class SimSystemPosix(SimStatePlugin):
                 stdout=self.stdout.copy(memo),
                 stderr=self.stderr.copy(memo),
                 fd={k: self.fd[k].copy(memo) for k in self.fd},
-                sockets={ident: self.sockets[ident].copy(memo) for ident in self.sockets},
-                first_socket=self.first_socket.copy(memo) if self.first_socket is not None else None,
+                sockets={ident: tuple(x.copy(memo) for x in self.sockets[ident]) for ident in self.sockets},
+                socket_queue=self.socket_queue, # shouldn't need to copy this - should be copied before use
                 argv=self.argv,
                 argc=self.argc,
                 environ=self.environ,
@@ -395,8 +417,8 @@ class SimSystemPosix(SimStatePlugin):
             for ident in self.sockets:
                 if ident not in o.sockets:
                     raise SimMergeError("Can't merge states with disparate sockets")
-            if self.first_socket is not o.first_socket:
-                raise SimMergeError("Can't merge states with disparate sockets")
+            if len(self.socket_queue) != len(o.socket_queue) or any(x is not y for x, y in zip(self.socket_queue, o.socket_queue)):
+                raise SimMergeError("Can't merge states with disparate socket queues")
 
         merging_occurred = False
         for fd in self.fd:
@@ -444,10 +466,18 @@ class SimSystemPosix(SimStatePlugin):
         """
         Returns the concrete content for a file descriptor.
 
+        BACKWARD COMPATIBILITY: if you ask for file descriptors 0 1 or 2, it will return the data from stdin, stdout,
+        or stderr as a flat string.
+
         :param fd:  A file descriptor.
         :return:    The concrete content.
         :rtype:     str
         """
+        if fd is 0 or fd is 1 or fd is 2:
+            data = [self.stdin, self.stdout, self.stderr][fd].concretize(**kwargs)
+            if type(data) is list:
+                data = ''.join(data)
+            return data
         return self.get_fd(fd).concretize(**kwargs)
 
 

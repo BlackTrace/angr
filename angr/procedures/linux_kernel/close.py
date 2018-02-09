@@ -10,4 +10,7 @@ class close(angr.SimProcedure):
     IS_SYSCALL = True
 
     def run(self, fd):
-        return self.state.posix.close(fd)
+        if self.state.posix.close(fd):
+            return 0
+        else:
+            return -1

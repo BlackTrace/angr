@@ -15,7 +15,7 @@ from ..state_plugins import SimStatePreconstrainer, SimSystemPosix
 from ..calling_conventions import DEFAULT_CC
 from ..procedures import SIM_PROCEDURES as P
 from .. import sim_options as o
-from ..storage.file import SimFile
+from ..storage.file import SimFile, SimFileBase
 from ..misc import IRange
 
 
@@ -112,6 +112,9 @@ class SimOS(object):
             kwargs['os_name'] = self.name
 
         state = SimState(self.project, **kwargs)
+
+        if stdin is not None and not isinstance(stdin, SimFileBase):
+            stdin = SimFile(name='stdin', content=stdin, has_end=True)
 
         last_addr = self.project.loader.main_object.max_addr
         brk = last_addr - last_addr % 0x1000 + 0x1000

@@ -13,5 +13,5 @@ class socket(angr.SimProcedure):
         conc_protocol = self.state.solver.eval(protocol)
         nonce = self.state.globals.get('socket_counter', 0) + 1
         self.state.globals['socket_counter'] = nonce
-        fd = self.state.posix.open_socket(('socket', domain, typ, protocol, nonce))
+        fd = self.state.posix.open_socket(('socket', conc_domain, conc_typ, conc_protocol, nonce))
         return fd
