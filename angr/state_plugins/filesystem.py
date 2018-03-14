@@ -205,7 +205,7 @@ class SimFilesystem(SimStatePlugin): # pretends links don't exist
 
         return None, path_chunks
 
-SimStatePlugin.register_default('fs', SimFilesystem)
+SimFilesystem.register_default('fs')
 
 class SimMount(SimStatePlugin):
     """
@@ -591,4 +591,4 @@ class SimHostFilesystem(SimMount):
 #            else:
 #                raise SimFilesystemError("Can't handle anything but files and directories in concrete filesystem")
 #
-#SimStatePlugin.register_default('fs', SimDirectory)
+#SimDirectory.register_default('fs')
