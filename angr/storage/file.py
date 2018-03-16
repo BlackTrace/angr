@@ -81,7 +81,7 @@ class SimFileBase(SimStatePlugin):
         """
         raise NotImplementedError
 
-    def read(self, pos, size):
+    def read(self, pos, size, **kwargs):
         """
         Read some data from the file.
 
@@ -91,7 +91,7 @@ class SimFileBase(SimStatePlugin):
         """
         raise NotImplementedError
 
-    def write(self, pos, data, size=None):
+    def write(self, pos, data, size=None, **kwargs):
         """
         Write some data to the file.
 
@@ -179,7 +179,7 @@ class SimFile(SimFileBase, SimSymbolicMemory):
         kwargs['extra_constraints'] = kwargs.get('extra_constraints', ()) + (self._size == size,)
         return self.state.solver.eval(data, **kwargs)
 
-    def read(self, pos, size):
+    def read(self, pos, size, **kwargs):
         # Step 1: figure out a reasonable concrete size to use for the memory load
         # since we don't want to concretize anything
         if self.state.solver.symbolic(size):
@@ -218,7 +218,7 @@ class SimFile(SimFileBase, SimSymbolicMemory):
             # note: this assumes that constraints cannot be removed
             return self.load(pos, passed_max_size), size, size + pos
 
-    def write(self, pos, data, size=None):
+    def write(self, pos, data, size=None, **kwargs):
         data = _deps_unpack(data)[0]
         if size is None:
             size = len(data) // 8 if isinstance(data, claripy.Bits) else len(data)
@@ -308,12 +308,13 @@ class SimPackets(SimFileBase):
         kwargs['cast_to'] = bytes
         return ['' if i == 0 else self.state.solver.eval(x[0].get_bytes(0, i), **kwargs) for i, x in zip(lengths, self.content)]
 
-    def read(self, addr, size):
+    def read(self, addr, size, short_reads=None, **kwargs):
         """
         Read a packet from the stream.
 
         :param int addr:    The packet number to read from the sequence of the stream. May be None to append to the stream.
         :param size:        The size to read. May be symbolic.
+        :param short_reads: Whether to replace the size with a symbolic value constrained to less than or equal to the original size. If unspecified, will be chosen based on the state option.
         :return:            A tuple of the data read (a bitvector of the length that is the maximum length of the read) and the actual size of the read.
         """
         # sanity check on read/write modes
@@ -345,7 +346,7 @@ class SimPackets(SimFileBase):
         max_size = None
 
         # if short reads are enabled, replace size with a symbol
-        if sim_options.SHORT_READS in self.state.options:
+        if short_reads is True or (short_reads is None and sim_options.SHORT_READS in self.state.options):
             size = self.state.solver.BVS('packetsize_%d_%s' % (len(self.content), self.ident), self.state.arch.bits)
             self.state.solver.add(size <= orig_size)
 
@@ -371,7 +372,7 @@ class SimPackets(SimFileBase):
         self.content.append(packet)
         return packet + (addr+1,)
 
-    def write(self, addr, data, size=None):
+    def write(self, addr, data, size=None, **kwargs):
         """
         Write a packet to the stream.
 
@@ -444,74 +445,6 @@ class SimPackets(SimFileBase):
     def widen(self, _):
         raise SimMergeError("Widening the filesystem is unsupported")
 
-#class SimFileConcrete(SimFileBase):
-#    """
-#    A SimFile which forwards all its reads and writes to the host filesystem.
-#
-#    :param host_path:   The path in the host filesystem to use
-#    :param writable:    Whether to open this file for writing. If the file may not be opened for writing, this will be
-#                        ignored.
-#    """
-#    def __init__(self, host_path, writable=False):
-#        super(SimFileConcrete, self).__init__(host_path, writable=writable)
-#        self.host_path = host_path
-#        try:
-#            self.host_file = open(host_path, 'r+b' if writable else 'rb')
-#        except OSError:
-#            if not writable:
-#                raise
-#            self.host_file = open(host_path, 'rb')
-#
-#    def concretize(self):
-#        self.host_file.seek(0)
-#        return self.host_file.read()
-#
-#    def read(self, pos, size):
-#        conc_size = self.state.solver.max(size)
-#        if self.state.solver.symbolic(size):
-#            self.state.solver.add(size == conc_size)
-#            l.info("Concretizing read size for concrete filesystem to %d", conc_size)
-#
-#        conc_pos = self.state.solver.eval(pos)
-#        self.state.solver.add(pos == conc_pos)
-#
-#        self.host_file.seek(conc_pos)
-#        data = self.host_file.read(conc_size)
-#        return self.state.solver.BVV(data), len(data)
-#
-#    def write(self, pos, data, size=None):
-#        if size is None:
-#            size = len(data)
-#
-#        conc_size = self.state.solver.max(size)
-#        if self.state.solver.symbolic(size):
-#            self.state.solver.add(size == conc_size)
-#            l.info("Concretizing write size for concrete filesystem to %d", conc_size)
-#
-#        data_slice = data.get_bytes(0, conc_size)
-#        conc_data = self.state.solver.eval(data_slice, cast_to=str)
-#        if self.state.solver.symbolic(data_slice):
-#            self.state.solver.add(data_slice == conc_data)
-#            l.info("Concretizing write data for concrete filesystem to %r", conc_data)
-#
-#        conc_pos = self.state.solver.eval(pos)
-#        self.state.solver.add(pos == conc_pos)
-#
-#        self.host_file.seek(conc_pos)
-#        self.host_file.write(conc_data)
-#
-#    def copy(self, _):
-#        # this holds no mutable data
-#        return self
-#
-#    def merge(self, others, conditions, common_ancestor=None): # pylint: disable=unused-argument
-#        l.error("The concept of merging concrete files doesn't make sense...")
-#        return False
-#
-#    def widen(self, others):
-#        return self.merge(others, [])
-
-
 class SimFileDescriptorBase(SimStatePlugin):
     """
     The base class for implementations of POSIX file descriptors.
@@ -519,7 +452,7 @@ class SimFileDescriptorBase(SimStatePlugin):
     All file descriptors should respect the CONCRETIZE_SYMBOLIC_{READ,WRITE}_SIZES state options.
     """
 
-    def read(self, addr, size):
+    def read(self, addr, size, **kwargs):
         """
         Reads some data from the file, storing it into memory.
 
@@ -531,7 +464,7 @@ class SimFileDescriptorBase(SimStatePlugin):
         self.state.memory.store(addr, data, size=realsize)
         return realsize
 
-    def write(self, addr, size):
+    def write(self, addr, size, **kwargs):
         """
         Writes some data, loaded from the state, into the file.
 
@@ -560,7 +493,7 @@ class SimFileDescriptorBase(SimStatePlugin):
         data = self.state.memory.load(addr, passed_max_size)
         return self.write_data(data, size)
 
-    def read_data(self, size):
+    def read_data(self, size, **kwargs):
         """
         Reads some data from the file, returning the data.
 
@@ -569,7 +502,7 @@ class SimFileDescriptorBase(SimStatePlugin):
         """
         raise NotImplementedError
 
-    def write_data(self, data, size=None):
+    def write_data(self, data, size=None, **kwargs):
         """
         Write some data, provided as an argument into the file.
 
@@ -663,12 +596,12 @@ class SimFileDescriptor(SimFileDescriptorBase):
         self._pos = 0
         self.flags = flags
 
-    def read_data(self, size):
+    def read_data(self, size, **kwargs):
         size = self._prep_read(size)
         data, realsize, self._pos = self.file.read(self._pos, size)
         return data, realsize
 
-    def write_data(self, data, size=None):
+    def write_data(self, data, size=None, **kwargs):
         if self.flags & Flags.O_APPEND and self.file.seekable:
             self._pos = self.file.size
 
@@ -774,12 +707,12 @@ class SimFileDescriptorDuplex(SimFileDescriptorBase):
         self._read_pos = 0
         self._write_pos = 0
 
-    def read_data(self, size):
+    def read_data(self, size, **kwargs):
         size = self._prep_read(size)
         data, realsize, self._read_pos = self._read_file.read(self._read_pos, size)
         return data, realsize
 
-    def write_data(self, data, size=None):
+    def write_data(self, data, size=None, **kwargs):
         data = _deps_unpack(data)[0]
         if size is None:
             size = len(data) // 8 if isinstance(data, claripy.Bits) else len(data)
@@ -846,269 +779,5 @@ class SimFileDescriptorDuplex(SimFileDescriptorBase):
 
     def widen(self, _):
         raise SimMergeError("Widening the filesystem is unsupported")
-
-# OLD
-#class SimFile(SimStatePlugin):
-#    """
-#    Represents a file.
-#    """
-#
-#    # Creates a SimFile
-#    def __init__(self, name, mode, pos=0, content=None, size=None, closed=None):
-#        super(SimFile, self).__init__()
-#        self.name = name
-#        self.mode = mode
-#
-#        self.pos = pos
-#
-#        self.size = size
-#
-#        self.content = SimSymbolicMemory(memory_id="file_%s_%d" % (name, file_counter.next())) if content is None else content
-#        self.closed = False if closed is None else closed
-#
-#    @property
-#    def read_pos(self):
-#        return self.pos
-#
-#    @read_pos.setter
-#    def read_pos(self, val):
-#        self.pos = val
-#
-#    @property
-#    def write_pos(self):
-#        return self.pos
-#
-#    @write_pos.setter
-#    def write_pos(self, val):
-#        self.pos = val
-#
-#    def set_state(self, st):
-#        super(SimFile, self).set_state(st)
-#
-#        if isinstance(self.pos, (int, long)):
-#            self.pos = claripy.BVV(self.pos, st.arch.bits)
-#
-#        if isinstance(self.size, (int, long)):
-#            self.size = claripy.BVV(self.size, st.arch.bits)
-#
-#        self.content.set_state(st)
-#
-#    def variables(self):
-#        """
-#        :return: the symbolic variable names associated with the file.
-#        """
-#        return self.content.mem._name_mapping.keys()
-#
-#    def close(self):
-#        l.debug("File %s closed.", self.name)
-#        self.closed = True
-#        return 0
-#
-#    def read(self, dst_addr, length):
-#        """
-#        Reads some data from the current (or provided) position of the file.
-#
-#        :param dst_addr:    If specified, the data is written to that address.
-#        :param length:      The length of the read.
-#        :return:            The length of the read.
-#        """
-#
-#        orig_length = length
-#        real_length = length
-#        max_length = length
-#
-#        if self.size is not None:
-#            max_length = self.size - self.pos
-#
-#        # TODO: check file close status
-#
-#        # check if we need to concretize the length
-#        if (
-#            sim_options.CONCRETIZE_SYMBOLIC_FILE_READ_SIZES in self.state.options and
-#            (self.state.se.symbolic(orig_length) or self.state.se.symbolic(max_length))
-#        ):
-#            orig_max = self.state.se.max_int(orig_length)
-#            self.state.add_constraints(orig_length == orig_max)
-#            real_length = min(orig_max, self.state.se.max_int(max_length))
-#
-#        if self.size is not None:
-#            length_constraint = self.pos + real_length <= self.size
-#            if (self.state.se.symbolic(real_length) or self.state.se.symbolic(max_length)) and \
-#                    self.state.se.satisfiable(extra_constraints=(length_constraint,)):
-#                self.state.add_constraints(length_constraint)
-#            elif not self.state.se.symbolic(real_length) or not self.state.se.symbolic(max_length):
-#                real_length = min(self.state.se.eval(max_length), self.state.se.eval(real_length))
-#
-#        self.content.copy_contents(dst_addr, self.pos, real_length , dst_memory=self.state.memory)
-#        self.read_pos += _deps_unpack(real_length)[0]
-#        return real_length
-#
-#    def read_from(self, length):
-#
-#        # TODO: check file close status
-#
-#        read_length = length
-#        if self.size is not None:
-#            remaining = self.size - self.pos
-#            read_length = self.state.se.If(remaining < length, remaining, length)
-#
-#        data = self.content.load(self.pos, read_length)
-#        self.read_pos += _deps_unpack(read_length)[0]
-#        return data
-#
-#    # Writes some data to the current position of the file.
-#    def write(self, content, length):
-#        # TODO: something about length
-#        # TODO: check file close status
-#
-#        self.content.store(self.pos, content)
-#        self.write_pos += _deps_unpack(length)[0]
-#        return length
-#
-#    # Seeks to a position in the file.
-#    def seek(self, where):
-#        # TODO: check file close status
-#
-#        if isinstance(where, (int, long)):
-#            where = self.state.se.BVV(where, self.state.arch.bits)
-#        self.pos = where
-#
-#    # Copies the SimFile object.
-#    def copy(self):
-#        return SimFile(self.name, self.mode, pos=self.pos, content=self.content.copy(), size=self.size, closed=self.closed)
-#
-#    def all_bytes(self):
-#        indexes = self.content.mem.keys()
-#        if len(indexes) == 0:
-#            return self.state.se.BVV("")
-#
-#        min_idx = min(indexes)
-#        max_idx = max(indexes)
-#        buff = [ ]
-#        for i in range(min_idx, max_idx+1):
-#            buff.append(self.content.load(i, 1))
-#        return self.state.se.Concat(*buff)
-#
-#    def concretize(self, **kwargs):
-#        """
-#        Returns a concrete value for this file satisfying the current state constraints.
-#
-#        Or: generate a testcase for this file.
-#        """
-#        return self.state.se.eval(self.all_bytes(), cast_to=str, **kwargs)
-#
-#    def merge(self, others, merge_conditions, common_ancestor=None):
-#        """
-#        Merges the SimFile object with `others`.
-#        """
-#        if not all(isinstance(oth, SimFile) for oth in others):
-#            raise SimMergeError("merging files of different types is not supported")
-#
-#        all_files = list(others) + [ self ]
-#
-#        if len(set(o.pos for o in all_files)) > 1:
-#            l.warning("Cheap HACK to support multiple file positions in a merge.")
-#            # self.pos = max(o.pos for o in all_files)
-#            # max cannot be used as file positions might be symbolic.
-#            #max_pos = None
-#            #for o in all_files:
-#            #   if max_pos is not None:
-#            #       comp = self.state.se.simplify(max_pos >= o.pos)
-#            #       #if self.state.se.symbolic(comp):
-#            #       #   #import ipdb; ipdb.set_trace()
-#            #       #   raise SimMergeError("merging file positions with symbolic max position is not ye supported (TODO)")
-#
-#            #       max_pos = o.pos if self.state.se.is_false(comp) else max_pos
-#            #   else:
-#            #       max_pos = o.pos
-#            self.pos = max(
-#                self.state.se.max(self.pos),
-#                max(o.state.se.max(o.pos) for o in others)
-#            )
-#
-#        #if len(set(o.name for o in all_files)) > 1:
-#        #   raise SimMergeError("merging file names is not yet supported (TODO)")
-#
-#        #if len(set(o.mode for o in all_files)) > 1:
-#        #   raise SimMergeError("merging modes is not yet supported (TODO)")
-#
-#        return self.content.merge(
-#            [ o.content for o in others ], merge_conditions, common_ancestor=common_ancestor
-#        )
-#
-#    def widen(self, others):
-#        return self.merge(others, [])
-#
-#
-#class SimDialogue(SimFile):
-#    """
-#    Emulates a dialogue with a program. Enables us to perform concrete short reads.
-#    """
-#
-#    def __init__(self, name, mode=None, pos=0, content=None, size=None, dialogue_entries=None):
-#        super(SimDialogue, self).__init__(name, mode=mode, pos=pos, content=content, size=size)
-#
-#        self.dialogue_entries = [ ] if dialogue_entries is None else dialogue_entries
-#
-#    def set_state(self, st):
-#        super(SimDialogue, self).set_state(st)
-#
-#        if isinstance(self.pos, (int, long)):
-#            self.pos = claripy.BVV(self.pos, st.arch.bits)
-#
-#        if isinstance(self.size, (int, long)):
-#            self.size = claripy.BVV(self.size, st.arch.bits)
-#
-#        self.content.set_state(st)
-#
-#    def add_dialogue_entry(self, dialogue_len):
-#        """
-#        Add a new dialogue piece to the end of the dialogue.
-#        """
-#
-#        self.dialogue_entries.append(dialogue_len)
-#
-#    def read(self, dst_addr, length):
-#        """
-#        Reads some data from current dialogue entry, emulates short reads.
-#        """
-#
-#        # make sure there is a current dialogue
-#        try:
-#            # this should always be a concrete value
-#            current_pkt_length = self.dialogue_entries.pop(0)
-#        except IndexError:
-#            return 0
-#
-#        # two things can happen here:
-#        #  * we have a less than or equal amount of concrete content than the request read length
-#        #  * we have more concrete content than what was requested
-#
-#        # we assume the length passed to read can always be concretized to a single value
-#        # because our dialogue entries will always be preconstrained
-#        lengths = self.state.se.eval_upto(length, 2)
-#        if len(lengths) > 1:
-#            raise ValueError("read called with a symbolic length which can be more than a single value")
-#        length_c = lengths[0]
-#
-#        if current_pkt_length <= length_c:
-#            self.content.copy_contents(dst_addr, self.pos, current_pkt_length, dst_memory=self.state.memory)
-#            return_length = current_pkt_length
-#
-#        else:
-#            self.content.copy_contents(dst_addr, self.pos, length_c, dst_memory=self.state.memory)
-#            return_length = length_c
-#
-#            # now add the remaining content as a new dialogue on top of the dialogue list
-#            leftovers = current_pkt_length - length_c
-#
-#            self.dialogue_entries.insert(0, leftovers)
-#
-#        self.pos += return_length
-#        return return_length
-#
-#    # Copies the SimDialogue object.
-#    def copy(self):
-#        return SimDialogue(self.name, mode=self.mode, pos=self.pos, content=self.content.copy(), size=self.size, dialogue_entries=list(self.dialogue_entries))
 
 from ..errors import SimMergeError, SimFileError, SimSolverError

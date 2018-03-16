@@ -87,12 +87,11 @@ def test_stops():
 
 def run_longinit(arch):
     p = angr.Project(os.path.join(test_location, 'binaries/tests/' + arch + '/longinit'))
-    s_unicorn = p.factory.entry_state(add_options=so.unicorn) # unicorn
-    pg = p.factory.simgr(s_unicorn)
+    s_unicorn = p.factory.entry_state(add_options=so.unicorn, remove_options={so.SHORT_READS})
+    pg = p.factory.simgr(s_unicorn, save_unconstrained=True, save_unsat=True)
     pg.explore()
     s = pg.deadended[0]
-    first = s.posix.files[0].content.load(0, 9)
-    second = s.posix.files[0].content.load(9, 9)
+    (first, _), (second, _) = s.posix.stdin.content
     s.add_constraints(first == s.se.BVV('A'*9))
     s.add_constraints(second == s.se.BVV('B'*9))
     nose.tools.assert_equal(s.posix.dumps(1), "You entered AAAAAAAAA and BBBBBBBBB!\n")

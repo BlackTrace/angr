@@ -585,7 +585,7 @@ class SimSymbolicMemory(SimMemory): #pylint:disable=abstract-method
 
             chunk_off = i-chunk_start
             b = chunk[chunk_size*self.state.arch.byte_width - chunk_off*self.state.arch.byte_width - 1 : chunk_size*self.state.arch.byte_width - chunk_off*self.state.arch.byte_width - seek_size*self.state.arch.byte_width]
-            cases.append([b == what, start + i])
+            cases.append([b == what, claripy.BVV(i, len(start))])
             match_indices.append(i)
 
             if self.state.mode == 'static':
@@ -631,7 +631,7 @@ class SimSymbolicMemory(SimMemory): #pylint:disable=abstract-method
                 constraints += [ self.state.se.Or(*[ c for c,_ in cases]) ]
 
             #l.debug("running ite_cases %s, %s", cases, default)
-            r = self.state.se.ite_cases(cases, default)
+            r = self.state.se.ite_cases(cases, default) + start
             return r, constraints, match_indices
 
     def __contains__(self, dst):
