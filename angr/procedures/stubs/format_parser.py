@@ -207,10 +207,9 @@ class FormatString(object):
 
         if simfd is not None:
             region = simfd.read_storage
-            position = simfd._pos if hasattr(simfd, '_pos') else simfd._read_pos # XXX THIS IS BAD
+            addr = simfd._pos if hasattr(simfd, '_pos') else simfd._read_pos # XXX THIS IS BAD
         else:
             region = self.parser.state.memory
-            position = addr
 
         bits = self.parser.state.arch.bits
         failed = self.parser.state.se.BVV(0, bits)

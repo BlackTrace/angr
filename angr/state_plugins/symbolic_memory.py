@@ -631,7 +631,7 @@ class SimSymbolicMemory(SimMemory): #pylint:disable=abstract-method
                 constraints += [ self.state.se.Or(*[ c for c,_ in cases]) ]
 
             #l.debug("running ite_cases %s, %s", cases, default)
-            r = self.state.se.ite_cases(cases, default) + start
+            r = self.state.se.ite_cases(cases, default - start) + start
             return r, constraints, match_indices
 
     def __contains__(self, dst):
