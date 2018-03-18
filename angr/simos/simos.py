@@ -206,7 +206,7 @@ class SimOS(object):
             return self.state_full_init(**kwargs)
 
         if type(input_content) is str:
-            stdin = SimFile("/dev/stdin", "r", size=len(input_content))
+            stdin = SimFile("/dev/stdin", size=len(input_content))
         elif input_content.getattr('stdin', None) is not None:
             stdin = input_content.stdin['/dev/stdin']
         else:

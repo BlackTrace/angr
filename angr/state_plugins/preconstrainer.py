@@ -80,21 +80,19 @@ class SimStatePreconstrainer(SimStatePlugin):
             repair_entry_state_opts = True
             self.state.options -= {o.TRACK_ACTION_HISTORY}
 
-        # TODO THIS IS SO BROKEN
-        stdin = self.state.posix.get_fd(0)
+        stdin = self.state.posix.stdin
         if type(self.input_content) is str: # not a PoV, just raw input
-            for b in self.input_content:
-                self._preconstrain(b, stdin.read_data(1)[0])
+            for i, b in enumerate(self.input_content):
+                self._preconstrain(b, stdin.read(i, 1)[0])
 
         elif type(self.input_content.getattr('stdin', None)) is SimPackets: # a PoV, need to navigate the dialogue
             for write in self.input_content.writes:
+                cursor = 0
                 for b in write:
-                    self._preconstrain(b, stdin.read_data(1)[0])
+                    self._preconstrain(b, stdin.read(cursor, len(b))[0])
         else:
             l.error("Preconstrainer currently only supports a string or a TracerPoV as input content.")
             return
-
-        stdin.seek(0)
 
         if repair_entry_state_opts:
             self.state.options |= {o.TRACK_ACTION_HISTORY}

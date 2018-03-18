@@ -43,8 +43,8 @@ class receive(angr.SimProcedure):
             if not writable:
                 return 2
 
-            read_length = simfd.read(buf, count)
-            self.state.solver.add(read_length == count)
+            count = self.state.solver.eval(count)
+            read_length = simfd.read(buf, count, short_reads=False)
             self.state.memory.store(rx_bytes, read_length, condition=rx_bytes != 0, endness='Iend_LE')
             self.size = read_length
 

@@ -245,7 +245,7 @@ class Tracer(ExplorationTechnique):
             # qemu and vex have slightly different behaviors...
             if not simgr.active[0].se.satisfiable():
                 l.info("detected small discrepancy between qemu and angr, "
-                        "attempting to fix known cases")
+                        "attempting to fix known cases...")
 
                 # Have we corrected it?
                 corrected = False
@@ -265,6 +265,8 @@ class Tracer(ExplorationTechnique):
                         simgr.move('chosen', 'active')
 
                         corrected = True
+                    else:
+                        l.info("...not rep showing up as one/many basic blocks")
 
                 if not corrected:
                     l.warning("Unable to correct discrepancy between qemu and angr.")
@@ -308,7 +310,10 @@ class Tracer(ExplorationTechnique):
 
     @staticmethod
     def _tracer_cache_cond(state):
-        if  state.history.jumpkind.startswith('Ijk_Sys'):
+        if not state.satisfiable():
+            return False
+
+        if state.history.jumpkind.startswith('Ijk_Sys'):
             sys_procedure = state.project.simos.syscall(state)
             # TODO THIS IS BROKEN
             if sys_procedure.display_name == 'receive' and state.se.eval(state.posix.fd[0]._read_pos) == 0:
