@@ -65,6 +65,7 @@ class SimFileBase(SimStatePlugin):
         self.name = name
         self.ident = ident
         self.writable = writable
+        self._saved_solver = None
 
         if ident is None:
             nice_name = self.name if all(0x20 <= ord(c) <= 0x7f for c in self.name) else '???'
@@ -109,6 +110,19 @@ class SimFileBase(SimStatePlugin):
         The number of data bytes stored by the file at present. May be a symbolic value.
         """
         raise NotImplementedError
+
+    @property
+    def solver(self):
+        if self._saved_solver is not None:
+            return self._saved_solver
+        return self.state.solver
+
+    def save_solver(self):
+        """
+        Cache the state's solver object so even if the state gets garbage collected (remember, this is a state plugin so
+        we have only a weakref to it..!) we can still do constraint solves.
+        """
+        self._saved_solver = self.state.solver
 
 class SimFile(SimFileBase, SimSymbolicMemory):
     """
@@ -172,25 +186,25 @@ class SimFile(SimFileBase, SimSymbolicMemory):
         """
         Return a concretization of the contents of the file, as a flat bytestring.
         """
-        size = self.state.solver.eval(self._size, **kwargs)
+        size = self.solver.eval(self._size, **kwargs)
         data = self.load(0, size)
 
         kwargs['cast_to'] = kwargs.get('cast_to', str)
         kwargs['extra_constraints'] = kwargs.get('extra_constraints', ()) + (self._size == size,)
-        return self.state.solver.eval(data, **kwargs)
+        return self.solver.eval(data, **kwargs)
 
     def read(self, pos, size, **kwargs):
         # Step 1: figure out a reasonable concrete size to use for the memory load
         # since we don't want to concretize anything
-        if self.state.solver.symbolic(size):
+        if self.solver.symbolic(size):
             try:
-                passed_max_size = self.state.solver.max(size, extra_constraints=(size < self.state.libc.max_packet_size,))
+                passed_max_size = self.solver.max(size, extra_constraints=(size < self.state.libc.max_packet_size,))
             except SimSolverError:
-                passed_max_size = self.state.solver.min(size)
+                passed_max_size = self.solver.min(size)
                 l.warning("Symbolic read size is too large for threshold - concretizing to min (%d)", passed_max_size)
-                self.state.solver.add(size == passed_max_size)
+                self.solver.add(size == passed_max_size)
         else:
-            passed_max_size = self.state.solver.eval(size)
+            passed_max_size = self.solver.eval(size)
             if passed_max_size > 2**13:
                 l.warning("Program performing extremely large reads")
 
@@ -202,13 +216,13 @@ class SimFile(SimFileBase, SimSymbolicMemory):
         # Step 2.2: check harder for the possibility of EOFs
         # This is the size if we're reading to the end of the file
         distance_to_eof = self._size - pos
-        distance_to_eof = self.state.solver.If(self.state.solver.SLE(distance_to_eof, 0), 0, distance_to_eof)
+        distance_to_eof = self.solver.If(self.solver.SLE(distance_to_eof, 0), 0, distance_to_eof)
 
         # try to frontload some constraint solving to see if it's impossible for this read to EOF
-        if self.state.solver.satisfiable(extra_constraints=(size > distance_to_eof,)):
+        if self.solver.satisfiable(extra_constraints=(size > distance_to_eof,)):
             # it's possible to EOF
             # final size = min(passed_size, max(distance_to_eof, 0))
-            real_size = self.state.solver.If(size >= distance_to_eof, distance_to_eof, size)
+            real_size = self.solver.If(size >= distance_to_eof, distance_to_eof, size)
 
             return self.load(pos, passed_max_size), real_size, real_size + pos
         else:
@@ -225,7 +239,7 @@ class SimFile(SimFileBase, SimSymbolicMemory):
         # \(_^^)/
         self.store(pos, data, size=size)
         new_end = _deps_unpack(pos + size)[0] # decline to store SAO
-        self._size = self.state.solver.If(new_end > self._size, new_end, self._size)
+        self._size = self.solver.If(new_end > self._size, new_end, self._size)
         return new_end
 
     @SimStatePlugin.memo
@@ -249,7 +263,7 @@ class SimFile(SimFileBase, SimSymbolicMemory):
         if any(o.has_end != self.has_end for o in others):
             raise SimMergeError("Cannot merge files where some have ends and some don't")
 
-        self._size = self.state.solver.ite_cases(zip(merge_conditions[1:], (o._size for o in others)), self._size)
+        self._size = self.solver.ite_cases(zip(merge_conditions[1:], (o._size for o in others)), self._size)
 
         return super(SimFile, self).merge(others, merge_conditions, common_ancestor=common_ancestor)
 
@@ -304,9 +318,9 @@ class SimPackets(SimFileBase):
         """
         Returns a list of the packets read or written as bytestrings.
         """
-        lengths = [self.state.solver.eval(x[1], **kwargs) for x in self.content]
+        lengths = [self.solver.eval(x[1], **kwargs) for x in self.content]
         kwargs['cast_to'] = bytes
-        return ['' if i == 0 else self.state.solver.eval(x[0].get_bytes(0, i), **kwargs) for i, x in zip(lengths, self.content)]
+        return ['' if i == 0 else self.solver.eval(x[0].get_bytes(0, i), **kwargs) for i, x in zip(lengths, self.content)]
 
     def read(self, addr, size, short_reads=None, **kwargs):
         """
@@ -332,14 +346,14 @@ class SimPackets(SimFileBase):
             raise SimFileError("SimPacket.read(%d): Packet number is past frontier of %d?", addr, len(self.content))
         elif addr != len(self.content):
             _, realsize = self.content[addr]
-            self.state.solver.add(size <= realsize)
-            if not self.state.solver.satisfiable():
+            self.solver.add(size <= realsize)
+            if not self.solver.satisfiable():
                 raise SimFileError("Packet read size constraint made state unsatisfiable???")
             return self.content[addr] + (addr+1,)
 
         # typecheck
         if type(size) in (int, long):
-            size = self.state.solver.BVV(size, self.state.arch.bits)
+            size = self.solver.BVV(size, self.state.arch.bits)
 
         # The read is on the frontier. let's generate a new packet.
         orig_size = size
@@ -347,27 +361,27 @@ class SimPackets(SimFileBase):
 
         # if short reads are enabled, replace size with a symbol
         if short_reads is True or (short_reads is None and sim_options.SHORT_READS in self.state.options):
-            size = self.state.solver.BVS('packetsize_%d_%s' % (len(self.content), self.ident), self.state.arch.bits)
-            self.state.solver.add(size <= orig_size)
+            size = self.solver.BVS('packetsize_%d_%s' % (len(self.content), self.ident), self.state.arch.bits)
+            self.solver.add(size <= orig_size)
 
         # figure out the maximum size of the read
-        if not self.state.solver.symbolic(size):
-            max_size = self.state.solver.eval(size)
-        elif self.state.solver.satisfiable(extra_constraints=(size <= self.state.libc.max_packet_size,)):
+        if not self.solver.symbolic(size):
+            max_size = self.solver.eval(size)
+        elif self.solver.satisfiable(extra_constraints=(size <= self.state.libc.max_packet_size,)):
             l.info("Constraining symbolic packet size to be less than %d", self.state.libc.max_packet_size)
-            if not self.state.solver.is_true(orig_size <= self.state.libc.max_packet_size):
-                self.state.solver.add(size <= self.state.libc.max_packet_size)
-            if not self.state.solver.symbolic(orig_size):
-                max_size = min(self.state.solver.eval(orig_size), self.state.libc.max_packet_size)
+            if not self.solver.is_true(orig_size <= self.state.libc.max_packet_size):
+                self.solver.add(size <= self.state.libc.max_packet_size)
+            if not self.solver.symbolic(orig_size):
+                max_size = min(self.solver.eval(orig_size), self.state.libc.max_packet_size)
             else:
-                max_size = self.state.solver.max(size)
+                max_size = self.solver.max(size)
         else:
-            max_size = self.state.solver.min(size)
+            max_size = self.solver.min(size)
             l.warning("Could not constrain symbolic packet size to <= %d; using minimum %d for size", self.state.libc.max_packet_size, max_size)
-            self.state.solver.add(size == max_size)
+            self.solver.add(size == max_size)
 
         # generate the packet data and return it
-        data = self.state.solver.BVS('packet_%d_%s' % (len(self.content), self.ident), max_size * 8, key=('file', self.ident, 'packet', len(self.content)))
+        data = self.solver.BVS('packet_%d_%s' % (len(self.content), self.ident), max_size * 8, key=('file', self.ident, 'packet', len(self.content)))
         packet = (data, size)
         self.content.append(packet)
         return packet + (addr+1,)
@@ -393,7 +407,7 @@ class SimPackets(SimFileBase):
         if size is None:
             size = len(data) // 8 if isinstance(data, claripy.Bits) else len(data)
         if type(size) in (int, long):
-            size = self.state.solver.BVV(size, self.state.arch.bits)
+            size = self.solver.BVV(size, self.state.arch.bits)
 
         # sanity check on packet number and determine if data is already present
         if addr < 0:
@@ -403,9 +417,9 @@ class SimPackets(SimFileBase):
         elif addr != len(self.content):
             realdata, realsize = self.content[addr]
             maxlen = max(len(realdata), len(data))
-            self.state.solver.add(realdata[maxlen-1:0] == data[maxlen-1:0])
-            self.state.solver.add(size == realsize)
-            if not self.state.solver.satisfiable():
+            self.solver.add(realdata[maxlen-1:0] == data[maxlen-1:0])
+            self.solver.add(size == realsize)
+            if not self.solver.satisfiable():
                 raise SimFileError("Packet write equality constraints made state unsatisfiable???")
             return addr+1
 
@@ -432,12 +446,12 @@ class SimPackets(SimFileBase):
 
         for i, default in enumerate(self.content):
             max_data_length = max(len(default[0]), max(len(o.content[i][0]) for o in others))
-            merged_data = self.state.solver.ite_cases(
+            merged_data = self.solver.ite_cases(
                 zip(
                     conditions[1:],
                     (o.content[i][0].concat(claripy.BVV(0, max_data_length - len(o.content[i][0]))) for o in others)
                 ), default[0])
-            merged_size = self.state.solver.ite_cases(zip(conditions[1:], (o.content[i][1] for o in others)), default[1])
+            merged_size = self.solver.ite_cases(zip(conditions[1:], (o.content[i][1] for o in others)), default[1])
             self.content[i] = (merged_data, merged_size)
 
         return True

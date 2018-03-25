@@ -171,6 +171,7 @@ class SimFilesystem(SimStatePlugin): # pretends links don't exist
             except KeyError:
                 return False
             else:
+                simfile.save_solver()
                 self.state.history.add_event('fs_unlink', path=apath, simfile=simfile)
                 return True
         else:

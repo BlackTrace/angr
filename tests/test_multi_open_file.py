@@ -7,7 +7,7 @@ l = logging.getLogger('angr.tests.test_multi_open_file')
 
 test_location = str(os.path.dirname(os.path.realpath(__file__)))
 
-def run_test_multi_open_file():
+def test_multi_open_file():
     test_bin = os.path.join(test_location, "../../binaries/tests/x86_64/test_multi_open_file")
     b = angr.Project(test_bin)
 
@@ -34,8 +34,5 @@ def run_test_multi_open_file():
             assert False
 
 
-def test_multi_open_file():
-    yield run_test_multi_open_file
-
 if __name__ == "__main__":
-    run_test_multi_open_file()
+    test_multi_open_file()
