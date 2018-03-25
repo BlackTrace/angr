@@ -200,13 +200,13 @@ class SimOS(object):
         return state
 
     def state_tracer(self, input_content=None, magic_content=None, preconstrain_input=True,
-                     preconstrain_flag=True, constrained_addrs=None, **kwargs):
+                     preconstrain_flag=True, constrained_addrs=None, store_full_input=False, **kwargs):
 
         if input_content is None:
             return self.state_full_init(**kwargs)
 
         if type(input_content) is str:
-            stdin = SimFile("/dev/stdin", size=len(input_content))
+            stdin = SimFile("/dev/stdin", size=len(input_content), content=input_content if store_full_input else None)
         elif input_content.getattr('stdin', None) is not None:
             stdin = input_content.stdin['/dev/stdin']
         else:

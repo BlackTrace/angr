@@ -272,8 +272,8 @@ def syscall_hook(state):
     if syscall_name == "receive":
         # track the amount of stdout we had when we first read the byte
         stdin_min_stdout_reads = state.get_plugin("chall_resp_info").stdin_min_stdout_reads
-        stdout_pos = state.se.eval(state.posix.get_fd(1).tell())
-        stdin_pos = state.se.eval(state.posix.get_fd(0).tell())
+        stdout_pos = state.se.eval(state.posix.stdout.size)
+        stdin_pos = state.se.eval(state.posix.stdin.size)
         for i in range(0, stdin_pos):
             if i not in stdin_min_stdout_reads:
                 stdin_min_stdout_reads[i] = stdout_pos

@@ -460,7 +460,7 @@ class SimFileDescriptorBase(SimStatePlugin):
         :param size:    The requested length of the read
         :return:        The real length of the read
         """
-        data, realsize = self.read_data(size)
+        data, realsize = self.read_data(size, **kwargs)
         self.state.memory.store(addr, data, size=realsize)
         return realsize
 
@@ -491,7 +491,7 @@ class SimFileDescriptorBase(SimStatePlugin):
                 l.warning("Program performing extremely large write")
 
         data = self.state.memory.load(addr, passed_max_size)
-        return self.write_data(data, size)
+        return self.write_data(data, size, **kwargs)
 
     def read_data(self, size, **kwargs):
         """
@@ -774,6 +774,80 @@ class SimFileDescriptorDuplex(SimFileDescriptorBase):
                 raise SimMergeError("Cannot merge SimFileDescriptors over SimPackets with disparate number of packets")
         else:
             self._write_pos = self.state.solver.ite_cases(zip(conditions[1:], (o._write_pos for o in others)), self._write_pos)
+
+        return True
+
+    def widen(self, _):
+        raise SimMergeError("Widening the filesystem is unsupported")
+
+class SimPacketsSlots(SimFileBase):
+    """
+    SimPacketsSlots is the new SimDialogue, if you've ever seen that before.
+
+    The idea is that in some cases, the only thing you really care about is getting the lengths of reads right, and
+    some of them should be short reads, and some of them should be truncated. You provide to this class a list of read
+    lengths, and it figures out the length of each read, and delivers some content.
+
+    This class will NOT respect the position argument you pass it - this storage is not stateless.
+    """
+
+    seekable = False
+
+    def __init__(self, name, read_sizes, ident=None, **kwargs):
+        super(SimPacketsSlots, self).__init__(name, writable=False, ident=ident)
+
+        self.read_sizes = read_sizes
+        self.read_data = []
+
+    def concretize(self):
+        return [self.state.solver.eval(var, cast_to=str) for var in self.read_data]
+
+    def read(self, pos, size, **kwargs):
+        if not self.read_sizes:
+            return self.state.BVV(0, 0), 0, None
+
+        try:
+            req_size = self.state.solver.eval_one(size)
+        except SimSolverError:
+            raise SimFileError("SimPacketsSlots can't handle multivalued read sizes")
+
+        avail_size = self.read_sizes[0]
+
+        if avail_size > req_size:
+            # chop the packet in half
+            real_size = req_size
+            self.read_sizes[0] -= req_size
+        else:
+            # short read or full size read
+            real_size = avail_size
+            self.read_sizes.pop(0)
+
+        data = self.state.solver.BVS('packet_%d_%s' % (len(self.read_data), self.ident), real_size*8, key=('file', self.ident, 'packet'))
+        self.read_data.append(data)
+        return data, real_size, None
+
+    def write(self, pos, data, size=None, **kwargs):
+        raise SimFileError("Trying to write to SimPacketsSlots? Illegal")
+
+    @property
+    def size(self):
+        return sum(len(x) for x in self.read_data) // 8
+
+    @SimStatePlugin.memo
+    def copy(self, memo):
+        o = SimPacketsSlots(self.name, self.read_sizes, ident=self.ident)
+        o.read_data = list(self.read_data)
+        return o
+
+    def merge(self, others, merge_conditions, common_ancestor=None):
+        if any(self.read_sizes != o.read_sizes for o in others):
+            raise SimMergeError("Can't merge SimPacketsSlots with disparate reads")
+        already_read_sizes = [len(x) for x in self.read_data]
+        if any(already_read_sizes != [len(x) for x in o.read_data] for o in others):
+            raise SimMergeError("Can't merge SimPacketsSlots with disparate reads")
+
+        for i, default_var in self.read_data:
+            self.read_data[i] = self.state.solver.ite_cases(zip(merge_conditions[1:], [o.read_data[i] for o in others]), default_var)
 
         return True
 
